@@ -1,12 +1,36 @@
 import { html, svg, nothing } from "lit";
+import { extractQueryTerms, filterSessionsByQuery, parseToolSummary } from "../usage-helpers.ts";
 
 // Inline styles for usage view (app uses light DOM, so static styles don't work)
 const usageStylesString = `
+  .usage-page-header {
+    margin: 4px 0 12px;
+  }
+  .usage-page-title {
+    font-size: 28px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    margin-bottom: 4px;
+  }
+  .usage-page-subtitle {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin: 0 0 12px;
+  }
   /* ===== FILTERS & HEADER ===== */
   .usage-filters-inline {
     display: flex;
     gap: 8px;
     align-items: center;
+    flex-wrap: wrap;
+  }
+  .usage-filters-inline select {
+    padding: 6px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 13px;
   }
   .usage-filters-inline input[type="date"] {
     padding: 6px 10px;
@@ -83,12 +107,94 @@ const usageStylesString = `
     margin-left: 8px;
   }
   .usage-query-bar {
-    display: flex;
-    gap: 8px;
+    display: grid;
+    grid-template-columns: minmax(220px, 1fr) auto;
+    gap: 10px;
     align-items: center;
-    flex-wrap: wrap;
+    /* Keep the dropdown filter row from visually touching the query row. */
+    margin-bottom: 10px;
+  }
+  .usage-query-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: nowrap;
+    justify-self: end;
+  }
+  .usage-query-actions .btn {
+    height: 34px;
+    padding: 0 14px;
+    border-radius: 999px;
+    font-weight: 600;
+    font-size: 13px;
+    line-height: 1;
+    border: 1px solid var(--border);
+    background: var(--bg-secondary);
+    color: var(--text);
+    box-shadow: none;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+  }
+  .usage-query-actions .btn:hover {
+    background: var(--bg);
+    border-color: var(--border-strong);
+  }
+  .usage-action-btn {
+    height: 34px;
+    padding: 0 14px;
+    border-radius: 999px;
+    font-weight: 600;
+    font-size: 13px;
+    line-height: 1;
+    border: 1px solid var(--border);
+    background: var(--bg-secondary);
+    color: var(--text);
+    box-shadow: none;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+  }
+  .usage-action-btn:hover {
+    background: var(--bg);
+    border-color: var(--border-strong);
+  }
+  .usage-primary-btn {
+    background: #ff4d4d;
+    color: #fff;
+    border-color: #ff4d4d;
+    box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.12);
+  }
+  .btn.usage-primary-btn {
+    background: #ff4d4d !important;
+    border-color: #ff4d4d !important;
+    color: #fff !important;
+  }
+  .usage-primary-btn:hover {
+    background: #e64545;
+    border-color: #e64545;
+  }
+  .btn.usage-primary-btn:hover {
+    background: #e64545 !important;
+    border-color: #e64545 !important;
+  }
+  .usage-primary-btn:disabled {
+    background: rgba(255, 77, 77, 0.18);
+    border-color: rgba(255, 77, 77, 0.3);
+    color: #ff4d4d;
+    box-shadow: none;
+    cursor: default;
+    opacity: 1;
+  }
+  .usage-primary-btn[disabled] {
+    background: rgba(255, 77, 77, 0.18) !important;
+    border-color: rgba(255, 77, 77, 0.3) !important;
+    color: #ff4d4d !important;
+    opacity: 1 !important;
+  }
+  .usage-secondary-btn {
+    background: var(--bg-secondary);
+    color: var(--text);
+    border-color: var(--border);
   }
   .usage-query-input {
+    width: 100%;
     min-width: 220px;
     padding: 6px 10px;
     border: 1px solid var(--border);
@@ -116,32 +222,247 @@ const usageStylesString = `
   .usage-query-suggestion:hover {
     background: var(--bg-hover);
   }
+  .usage-filter-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+    margin-top: 14px;
+  }
+  details.usage-filter-select {
+    position: relative;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 6px 10px;
+    background: var(--bg);
+    font-size: 12px;
+    min-width: 140px;
+  }
+  details.usage-filter-select summary {
+    cursor: pointer;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    font-weight: 500;
+  }
+  details.usage-filter-select summary::-webkit-details-marker {
+    display: none;
+  }
+  .usage-filter-badge {
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+  .usage-filter-popover {
+    position: absolute;
+    left: 0;
+    top: calc(100% + 6px);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.08);
+    min-width: 220px;
+    z-index: 20;
+  }
+  .usage-filter-actions {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 8px;
+  }
+  .usage-filter-actions button {
+    border-radius: 999px;
+    padding: 4px 10px;
+    font-size: 11px;
+  }
+  .usage-filter-options {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 200px;
+    overflow: auto;
+  }
+  .usage-filter-option {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+  }
   .usage-query-hint {
     font-size: 11px;
     color: var(--text-muted);
   }
-  .usage-columns-panel {
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 6px 10px;
-    background: var(--bg);
-    font-size: 12px;
-  }
-  .usage-columns-panel summary {
-    cursor: pointer;
-    font-weight: 500;
-    color: var(--text);
-  }
-  .usage-columns-list {
+  .usage-query-chips {
     display: flex;
     flex-wrap: wrap;
-    gap: 8px;
-    margin-top: 8px;
+    gap: 6px;
+    margin-top: 6px;
   }
-  .usage-columns-item {
+  .usage-query-chip {
     display: inline-flex;
     align-items: center;
     gap: 6px;
+    padding: 4px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--bg-secondary);
+    font-size: 11px;
+  }
+  .usage-query-chip button {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 0;
+    line-height: 1;
+  }
+  .usage-header {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    background: var(--bg);
+  }
+  .usage-header.pinned {
+    position: sticky;
+    top: 12px;
+    z-index: 6;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.06);
+  }
+  .usage-pin-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--bg-secondary);
+    font-size: 11px;
+    color: var(--text);
+    cursor: pointer;
+  }
+  .usage-pin-btn.active {
+    background: var(--accent-subtle);
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+  .usage-header-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .usage-header-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .usage-header-metrics {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .usage-metric-badge {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 6px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: transparent;
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+  .usage-metric-badge strong {
+    font-size: 12px;
+    color: var(--text);
+  }
+  .usage-controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .usage-controls .active-filters {
+    flex: 1 1 100%;
+  }
+  .usage-controls input[type="date"] {
+    min-width: 140px;
+  }
+  .usage-presets {
+    display: inline-flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .usage-presets .btn {
+    padding: 4px 8px;
+    font-size: 11px;
+  }
+  .usage-quick-filters {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .usage-select {
+    min-width: 120px;
+    padding: 6px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 12px;
+  }
+  .usage-export-menu summary {
+    cursor: pointer;
+    font-weight: 500;
+    color: var(--text);
+    list-style: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .usage-export-menu summary::-webkit-details-marker {
+    display: none;
+  }
+  .usage-export-menu {
+    position: relative;
+  }
+  .usage-export-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    font-size: 12px;
+  }
+  .usage-export-popover {
+    position: absolute;
+    right: 0;
+    top: calc(100% + 6px);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 8px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.08);
+    min-width: 160px;
+    z-index: 10;
+  }
+  .usage-export-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .usage-export-item {
+    text-align: left;
+    padding: 6px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--bg-secondary);
     font-size: 12px;
   }
   .usage-summary-grid {
@@ -156,15 +477,182 @@ const usageStylesString = `
     background: var(--bg-secondary);
     border: 1px solid var(--border);
   }
+  .usage-mosaic {
+    margin-top: 16px;
+    padding: 16px;
+  }
+  .usage-mosaic-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+  .usage-mosaic-title {
+    font-weight: 600;
+  }
+  .usage-mosaic-sub {
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+  .usage-mosaic-grid {
+    display: grid;
+    grid-template-columns: minmax(200px, 1fr) minmax(260px, 2fr);
+    gap: 16px;
+    align-items: start;
+  }
+  .usage-mosaic-section {
+    background: var(--bg-subtle);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px;
+  }
+  .usage-mosaic-section-title {
+    font-size: 12px;
+    font-weight: 600;
+    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .usage-mosaic-total {
+    font-size: 20px;
+    font-weight: 700;
+  }
+  .usage-daypart-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
+    gap: 8px;
+  }
+  .usage-daypart-cell {
+    border-radius: 8px;
+    padding: 10px;
+    color: var(--text);
+    background: rgba(255, 77, 77, 0.08);
+    border: 1px solid rgba(255, 77, 77, 0.2);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .usage-daypart-label {
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .usage-daypart-value {
+    font-size: 14px;
+  }
+  .usage-hour-grid {
+    display: grid;
+    grid-template-columns: repeat(24, minmax(6px, 1fr));
+    gap: 4px;
+  }
+  .usage-hour-cell {
+    height: 28px;
+    border-radius: 6px;
+    background: rgba(255, 77, 77, 0.1);
+    border: 1px solid rgba(255, 77, 77, 0.2);
+    cursor: pointer;
+    transition: border-color 0.15s, box-shadow 0.15s;
+  }
+  .usage-hour-cell.selected {
+    border-color: rgba(255, 77, 77, 0.8);
+    box-shadow: 0 0 0 2px rgba(255, 77, 77, 0.2);
+  }
+  .usage-hour-labels {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 6px;
+    margin-top: 8px;
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+  .usage-hour-legend {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin-top: 10px;
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+  .usage-hour-legend span {
+    display: inline-block;
+    width: 14px;
+    height: 10px;
+    border-radius: 4px;
+    background: rgba(255, 77, 77, 0.15);
+    border: 1px solid rgba(255, 77, 77, 0.2);
+  }
+  .usage-calendar-labels {
+    display: grid;
+    grid-template-columns: repeat(7, minmax(10px, 1fr));
+    gap: 6px;
+    font-size: 10px;
+    color: var(--text-muted);
+    margin-bottom: 6px;
+  }
+  .usage-calendar {
+    display: grid;
+    grid-template-columns: repeat(7, minmax(10px, 1fr));
+    gap: 6px;
+  }
+  .usage-calendar-cell {
+    height: 18px;
+    border-radius: 4px;
+    border: 1px solid rgba(255, 77, 77, 0.2);
+    background: rgba(255, 77, 77, 0.08);
+  }
+  .usage-calendar-cell.empty {
+    background: transparent;
+    border-color: transparent;
+  }
   .usage-summary-title {
     font-size: 11px;
     color: var(--text-muted);
     margin-bottom: 6px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .usage-info {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    margin-left: 6px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    font-size: 10px;
+    color: var(--text-muted);
+    cursor: help;
   }
   .usage-summary-value {
     font-size: 16px;
     font-weight: 600;
     color: var(--text-strong);
+  }
+  .usage-summary-value.good {
+    color: #1f8f4e;
+  }
+  .usage-summary-value.warn {
+    color: #c57a00;
+  }
+  .usage-summary-value.bad {
+    color: #c9372c;
+  }
+  .usage-summary-hint {
+    font-size: 10px;
+    color: var(--text-muted);
+    cursor: help;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 0 6px;
+    line-height: 16px;
+    height: 16px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
   }
   .usage-summary-sub {
     font-size: 11px;
@@ -182,14 +670,60 @@ const usageStylesString = `
     gap: 12px;
     font-size: 12px;
     color: var(--text);
+    align-items: flex-start;
+  }
+  .usage-list-value {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 2px;
+    text-align: right;
+  }
+  .usage-list-sub {
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+  .usage-list-item.button {
+    border: none;
+    background: transparent;
+    padding: 0;
+    text-align: left;
+    cursor: pointer;
+  }
+  .usage-list-item.button:hover {
+    color: var(--text-strong);
   }
   .usage-list-item .muted {
     font-size: 11px;
+  }
+  .usage-error-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .usage-error-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 8px;
+    align-items: center;
+    font-size: 12px;
+  }
+  .usage-error-date {
+    font-weight: 600;
+  }
+  .usage-error-rate {
+    font-variant-numeric: tabular-nums;
+  }
+  .usage-error-sub {
+    grid-column: 1 / -1;
+    font-size: 11px;
+    color: var(--text-muted);
   }
   .usage-badges {
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
+    margin-bottom: 8px;
   }
   .usage-badge {
     display: inline-flex;
@@ -239,44 +773,6 @@ const usageStylesString = `
     color: var(--text-muted);
     margin-top: 6px;
   }
-  .usage-trend-list {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-  }
-  .usage-trend-row {
-    display: grid;
-    grid-template-columns: minmax(120px, 1.3fr) minmax(80px, 2fr) minmax(60px, 0.7fr);
-    gap: 10px;
-    align-items: center;
-    font-size: 12px;
-  }
-  .usage-trend-label {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-  .usage-trend-meta {
-    font-size: 11px;
-    color: var(--text-muted);
-  }
-  .usage-trend-bars {
-    display: flex;
-    align-items: flex-end;
-    gap: 2px;
-    height: 32px;
-  }
-  .usage-trend-bar {
-    width: 6px;
-    border-radius: 3px 3px 0 0;
-    background: var(--accent);
-    opacity: 0.6;
-  }
-  .usage-trend-value {
-    text-align: right;
-    font-variant-numeric: tabular-nums;
-  }
-
   /* ===== CHART TOGGLE ===== */
   .chart-toggle {
     display: flex;
@@ -305,10 +801,16 @@ const usageStylesString = `
     padding: 4px 8px;
     font-size: 11px;
   }
+  .sessions-toggle {
+    border-radius: 4px;
+  }
+  .sessions-toggle .toggle-btn {
+    border-radius: 4px;
+  }
   .daily-chart-header {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    justify-content: flex-start;
     gap: 8px;
     margin-bottom: 6px;
   }
@@ -321,8 +823,8 @@ const usageStylesString = `
     display: flex;
     align-items: flex-end;
     height: 200px;
-    gap: 2px;
-    padding: 8px 4px 24px;
+    gap: 4px;
+    padding: 8px 4px 36px;
   }
   .daily-bar-wrapper {
     flex: 1;
@@ -360,11 +862,22 @@ const usageStylesString = `
   }
   .daily-bar-label {
     position: absolute;
-    bottom: -18px;
+    bottom: -28px;
     font-size: 10px;
     color: var(--text-muted);
     white-space: nowrap;
     text-align: center;
+    transform: rotate(-35deg);
+    transform-origin: top center;
+  }
+  .daily-bar-total {
+    position: absolute;
+    top: -16px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 10px;
+    color: var(--text-muted);
+    white-space: nowrap;
   }
   .daily-bar-tooltip {
     position: absolute;
@@ -430,6 +943,11 @@ const usageStylesString = `
     flex-wrap: wrap;
     gap: 16px;
     margin-top: 12px;
+  }
+  .cost-breakdown-total {
+    margin-top: 10px;
+    font-size: 12px;
+    color: var(--text-muted);
   }
   .legend-item {
     display: flex;
@@ -504,15 +1022,19 @@ const usageStylesString = `
     background: var(--accent-subtle);
   }
   .session-bar-label {
-    flex: 0 0 180px;
+    flex: 1 1 auto;
+    min-width: 0;
     font-size: 13px;
     color: var(--text);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
     display: flex;
     flex-direction: column;
     gap: 2px;
+  }
+  .session-bar-title {
+    /* Prefer showing the full name; wrap instead of truncating. */
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: break-word;
   }
   .session-bar-meta {
     font-size: 10px;
@@ -523,15 +1045,16 @@ const usageStylesString = `
     white-space: nowrap;
   }
   .session-bar-track {
-    flex: 1;
-    height: 8px;
+    flex: 0 0 90px;
+    height: 6px;
     background: var(--bg-secondary);
     border-radius: 4px;
     overflow: hidden;
+    opacity: 0.6;
   }
   .session-bar-fill {
     height: 100%;
-    background: #ff4d4d;
+    background: rgba(255, 77, 77, 0.7);
     border-radius: 4px;
     transition: width 0.3s ease;
   }
@@ -541,6 +1064,29 @@ const usageStylesString = `
     font-size: 12px;
     font-family: var(--font-mono);
     color: var(--text-muted);
+  }
+  .session-bar-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    flex: 0 0 auto;
+  }
+  .session-copy-btn {
+    height: 26px;
+    padding: 0 10px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--bg-secondary);
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+  }
+  .session-copy-btn:hover {
+    background: var(--bg);
+    border-color: var(--border-strong);
+    color: var(--text);
   }
 
   /* ===== TIME SERIES CHART ===== */
@@ -555,6 +1101,11 @@ const usageStylesString = `
     justify-content: space-between;
     align-items: center;
     margin-bottom: 12px;
+  }
+  .timeseries-controls {
+    display: flex;
+    gap: 6px;
+    align-items: center;
   }
   .timeseries-header {
     font-weight: 600;
@@ -596,6 +1147,10 @@ const usageStylesString = `
   .timeseries-svg .ts-bar:hover {
     fill: #cc3d3d;
   }
+  .timeseries-svg .ts-bar.output { fill: #ef4444; }
+  .timeseries-svg .ts-bar.input { fill: #f59e0b; }
+  .timeseries-svg .ts-bar.cache-write { fill: #10b981; }
+  .timeseries-svg .ts-bar.cache-read { fill: #06b6d4; }
   .timeseries-summary {
     margin-top: 12px;
     font-size: 13px;
@@ -618,12 +1173,14 @@ const usageStylesString = `
     overflow: hidden;
   }
   .session-logs-header {
-    padding: 12px 16px;
+    padding: 10px 14px;
     font-weight: 600;
     border-bottom: 1px solid var(--border);
     display: flex;
     justify-content: space-between;
     align-items: center;
+    font-size: 13px;
+    background: var(--bg-secondary);
   }
   .session-logs-loading {
     padding: 24px;
@@ -635,30 +1192,39 @@ const usageStylesString = `
     overflow-y: auto;
   }
   .session-log-entry {
-    padding: 12px 16px;
+    padding: 10px 14px;
     border-bottom: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    background: var(--bg);
   }
   .session-log-entry:last-child {
     border-bottom: none;
   }
   .session-log-entry.user {
-    background: var(--bg);
+    border-left: 3px solid var(--accent);
   }
   .session-log-entry.assistant {
-    background: var(--bg-secondary);
+    border-left: 3px solid var(--border-strong);
   }
   .session-log-meta {
     display: flex;
-    gap: 12px;
+    gap: 8px;
     align-items: center;
-    margin-bottom: 8px;
     font-size: 11px;
     color: var(--text-muted);
+    flex-wrap: wrap;
   }
   .session-log-role {
     font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
+    letter-spacing: 0.04em;
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 999px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
   }
   .session-log-entry.user .session-log-role {
     color: var(--accent);
@@ -668,11 +1234,15 @@ const usageStylesString = `
   }
   .session-log-content {
     font-size: 13px;
-    line-height: 1.6;
+    line-height: 1.5;
     color: var(--text);
     white-space: pre-wrap;
     word-break: break-word;
-    max-height: 200px;
+    background: var(--bg-secondary);
+    border-radius: 8px;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    max-height: 220px;
     overflow-y: auto;
   }
 
@@ -875,6 +1445,48 @@ const usageStylesString = `
     font-size: 12px;
     color: var(--text-muted);
   }
+  .sessions-card-meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin: 8px 0 10px;
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+  .sessions-card-stats {
+    display: inline-flex;
+    gap: 12px;
+  }
+  .sessions-sort {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+  .sessions-sort select {
+    padding: 4px 8px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text);
+    font-size: 12px;
+  }
+  .sessions-action-btn {
+    height: 28px;
+    padding: 0 10px;
+    border-radius: 8px;
+    font-size: 12px;
+    line-height: 1;
+  }
+  .sessions-action-btn.icon {
+    width: 32px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
   .sessions-card-hint {
     font-size: 11px;
     color: var(--text-muted);
@@ -890,9 +1502,9 @@ const usageStylesString = `
     padding: 8px;
   }
   .sessions-card .session-bar-row {
-    padding: 8px 10px;
+    padding: 6px 8px;
     border-radius: 6px;
-    margin-bottom: 4px;
+    margin-bottom: 3px;
     border: 1px solid transparent;
     transition: all 0.15s;
   }
@@ -902,15 +1514,29 @@ const usageStylesString = `
   }
   .sessions-card .session-bar-row.selected {
     border-color: var(--accent);
-    background: rgba(255, 77, 77, 0.08);
+    background: var(--accent-subtle);
+    box-shadow: inset 0 0 0 1px rgba(255, 77, 77, 0.15);
   }
   .sessions-card .session-bar-label {
-    flex: 0 0 140px;
+    flex: 1 1 auto;
+    min-width: 140px;
     font-size: 12px;
   }
   .sessions-card .session-bar-value {
     flex: 0 0 60px;
     font-size: 11px;
+    font-weight: 600;
+  }
+  .sessions-card .session-bar-track {
+    flex: 0 0 70px;
+    height: 5px;
+    opacity: 0.5;
+  }
+  .sessions-card .session-bar-fill {
+    background: rgba(255, 77, 77, 0.55);
+  }
+  .sessions-clear-btn {
+    margin-left: auto;
   }
   
   /* ===== EMPTY DETAIL STATE ===== */
@@ -953,7 +1579,7 @@ const usageStylesString = `
   
   /* ===== SESSION DETAIL PANEL ===== */
   .session-detail-panel {
-    margin-top: 18px;
+    margin-top: 12px;
     /* inherits background, border-radius, shadow from .card */
     border: 2px solid var(--accent) !important;
   }
@@ -961,7 +1587,7 @@ const usageStylesString = `
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 12px 16px;
+    padding: 8px 12px;
     border-bottom: 1px solid var(--border);
     cursor: pointer;
   }
@@ -975,13 +1601,18 @@ const usageStylesString = `
     align-items: center;
     gap: 8px;
   }
+  .session-detail-header-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
   .session-close-btn {
-    background: none;
-    border: none;
-    color: var(--text-muted);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
     cursor: pointer;
-    padding: 2px 6px;
-    font-size: 18px;
+    padding: 2px 8px;
+    font-size: 16px;
     line-height: 1;
     border-radius: 4px;
     transition: background 0.15s, color 0.15s;
@@ -989,11 +1620,12 @@ const usageStylesString = `
   .session-close-btn:hover {
     background: var(--bg-hover);
     color: var(--text);
+    border-color: var(--accent);
   }
   .session-detail-stats {
     display: flex;
-    gap: 16px;
-    font-size: 13px;
+    gap: 10px;
+    font-size: 12px;
     color: var(--text-muted);
   }
   .session-detail-stats strong {
@@ -1001,18 +1633,18 @@ const usageStylesString = `
     font-family: var(--font-mono);
   }
   .session-detail-content {
-    padding: 16px;
+    padding: 12px;
   }
   .session-summary-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-    gap: 12px;
-    margin-bottom: 16px;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 8px;
+    margin-bottom: 12px;
   }
   .session-summary-card {
     border: 1px solid var(--border);
     border-radius: 8px;
-    padding: 10px;
+    padding: 8px;
     background: var(--bg-secondary);
   }
   .session-summary-title {
@@ -1031,20 +1663,26 @@ const usageStylesString = `
   }
   .session-detail-row {
     display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 16px;
-    margin-bottom: 16px;
+    grid-template-columns: 1fr;
+    gap: 10px;
+    /* Separate "Usage Over Time" from the summary + Top Tools/Model Mix cards above. */
+    margin-top: 12px;
+    margin-bottom: 10px;
   }
   .session-detail-bottom {
     display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 16px;
+    grid-template-columns: minmax(0, 1.8fr) minmax(0, 1fr);
+    gap: 10px;
+    align-items: stretch;
   }
   .session-detail-bottom .session-logs-compact {
     margin: 0;
+    display: flex;
+    flex-direction: column;
   }
   .session-detail-bottom .session-logs-compact .session-logs-list {
-    max-height: 320px;
+    flex: 1 1 auto;
+    max-height: none;
   }
   .context-details-panel {
     display: flex;
@@ -1054,6 +1692,60 @@ const usageStylesString = `
     border-radius: 6px;
     border: 1px solid var(--border);
     padding: 12px;
+  }
+  .context-breakdown-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 10px;
+    margin-top: 8px;
+  }
+  .context-breakdown-card {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px;
+    background: var(--bg-secondary);
+  }
+  .context-breakdown-title {
+    font-size: 11px;
+    font-weight: 600;
+    margin-bottom: 6px;
+  }
+  .context-breakdown-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: 11px;
+  }
+  .context-breakdown-item {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .context-breakdown-more {
+    font-size: 10px;
+    color: var(--text-muted);
+    margin-top: 4px;
+  }
+  .context-breakdown-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .context-expand-btn {
+    border: 1px solid var(--border);
+    background: var(--bg-secondary);
+    color: var(--text-muted);
+    font-size: 11px;
+    padding: 4px 8px;
+    border-radius: 999px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .context-expand-btn:hover {
+    color: var(--text);
+    border-color: var(--border-strong);
+    background: var(--bg);
   }
   
   /* ===== COMPACT TIMESERIES ===== */
@@ -1114,24 +1806,62 @@ const usageStylesString = `
   /* ===== COMPACT LOGS ===== */
   .session-logs-compact {
     background: var(--bg);
-    border-radius: 6px;
+    border-radius: 10px;
     border: 1px solid var(--border);
     overflow: hidden;
     margin: 0;
+    display: flex;
+    flex-direction: column;
   }
   .session-logs-compact .session-logs-header {
-    padding: 8px 12px;
+    padding: 10px 12px;
     font-size: 12px;
   }
   .session-logs-compact .session-logs-list {
-    max-height: 250px;
+    max-height: none;
+    flex: 1 1 auto;
+    overflow: auto;
   }
   .session-logs-compact .session-log-entry {
     padding: 8px 12px;
   }
   .session-logs-compact .session-log-content {
     font-size: 12px;
-    max-height: 150px;
+    max-height: 160px;
+  }
+  .session-log-tools {
+    margin-top: 6px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg-secondary);
+    padding: 6px 8px;
+    font-size: 11px;
+    color: var(--text);
+  }
+  .session-log-tools summary {
+    cursor: pointer;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 600;
+  }
+  .session-log-tools summary::-webkit-details-marker {
+    display: none;
+  }
+  .session-log-tools-list {
+    margin-top: 6px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .session-log-tools-pill {
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 2px 8px;
+    font-size: 10px;
+    background: var(--bg);
+    color: var(--text);
   }
 
   /* ===== RESPONSIVE ===== */
@@ -1152,6 +1882,25 @@ const usageStylesString = `
     }
     .legend-item {
       font-size: 11px;
+    }
+    .daily-chart-bars {
+      height: 170px;
+      gap: 6px;
+      padding-bottom: 40px;
+    }
+    .daily-bar-label {
+      font-size: 8px;
+      bottom: -30px;
+      transform: rotate(-45deg);
+    }
+    .usage-mosaic-grid {
+      grid-template-columns: 1fr;
+    }
+    .usage-hour-grid {
+      grid-template-columns: repeat(12, minmax(10px, 1fr));
+    }
+    .usage-hour-cell {
+      height: 22px;
     }
   }
 `;
@@ -1376,28 +2125,50 @@ export type UsageProps = {
   costDaily: CostDailyEntry[];
   selectedSessions: string[]; // Support multiple session selection
   selectedDays: string[]; // Support multiple day selection
+  selectedHours: number[]; // Support multiple hour selection
   chartMode: "tokens" | "cost";
   dailyChartMode: "total" | "by-type";
   timeSeriesMode: "cumulative" | "per-turn";
+  timeSeriesBreakdownMode: "total" | "by-type";
   timeSeries: { points: TimeSeriesPoint[] } | null;
   timeSeriesLoading: boolean;
   sessionLogs: SessionLogEntry[] | null;
   sessionLogsLoading: boolean;
+  sessionLogsExpanded: boolean;
   query: string;
+  queryDraft: string;
+  sessionSort: "tokens" | "cost" | "recent" | "messages" | "errors";
+  sessionSortDir: "asc" | "desc";
+  recentSessions: string[];
+  sessionsTab: "all" | "recent";
   visibleColumns: UsageColumnId[];
+  timeZone: "local" | "utc";
+  contextExpanded: boolean;
+  headerPinned: boolean;
   onStartDateChange: (date: string) => void;
   onEndDateChange: (date: string) => void;
   onRefresh: () => void;
+  onTimeZoneChange: (zone: "local" | "utc") => void;
+  onToggleContextExpanded: () => void;
+  onToggleHeaderPinned: () => void;
+  onToggleSessionLogsExpanded: () => void;
   onSelectSession: (key: string, shiftKey: boolean) => void;
   onChartModeChange: (mode: "tokens" | "cost") => void;
   onDailyChartModeChange: (mode: "total" | "by-type") => void;
   onTimeSeriesModeChange: (mode: "cumulative" | "per-turn") => void;
+  onTimeSeriesBreakdownChange: (mode: "total" | "by-type") => void;
   onSelectDay: (day: string, shiftKey: boolean) => void; // Support shift-click
+  onSelectHour: (hour: number, shiftKey: boolean) => void;
   onClearDays: () => void;
+  onClearHours: () => void;
   onClearSessions: () => void;
   onClearFilters: () => void;
-  onQueryChange: (query: string) => void;
+  onQueryDraftChange: (query: string) => void;
+  onApplyQuery: () => void;
   onClearQuery: () => void;
+  onSessionSortChange: (sort: "tokens" | "cost" | "recent" | "messages" | "errors") => void;
+  onSessionSortDirChange: (dir: "asc" | "desc") => void;
+  onSessionsTabChange: (tab: "all" | "recent") => void;
   onToggleColumn: (column: UsageColumnId) => void;
 };
 
@@ -1426,8 +2197,248 @@ function formatTokens(n: number): string {
   return String(n);
 }
 
+function formatHourLabel(hour: number): string {
+  const date = new Date();
+  date.setHours(hour, 0, 0, 0);
+  return date.toLocaleTimeString(undefined, { hour: "numeric" });
+}
+
+function buildPeakErrorHours(sessions: UsageSessionEntry[], timeZone: "local" | "utc") {
+  const hourErrors = Array.from({ length: 24 }, () => 0);
+  const hourMsgs = Array.from({ length: 24 }, () => 0);
+
+  for (const session of sessions) {
+    const usage = session.usage;
+    if (!usage?.messageCounts || usage.messageCounts.total === 0) {
+      continue;
+    }
+    const start = usage.firstActivity ?? session.updatedAt;
+    const end = usage.lastActivity ?? session.updatedAt;
+    if (!start || !end) {
+      continue;
+    }
+    const startMs = Math.min(start, end);
+    const endMs = Math.max(start, end);
+    const durationMs = Math.max(endMs - startMs, 1);
+    const totalMinutes = durationMs / 60000;
+
+    let cursor = startMs;
+    while (cursor < endMs) {
+      const date = new Date(cursor);
+      const hour = getZonedHour(date, timeZone);
+      const nextHour = setToHourEnd(date, timeZone);
+      const nextMs = Math.min(nextHour.getTime(), endMs);
+      const minutes = Math.max((nextMs - cursor) / 60000, 0);
+      const share = minutes / totalMinutes;
+      hourErrors[hour] += usage.messageCounts.errors * share;
+      hourMsgs[hour] += usage.messageCounts.total * share;
+      cursor = nextMs + 1;
+    }
+  }
+
+  return hourMsgs
+    .map((msgs, hour) => {
+      const errors = hourErrors[hour];
+      const rate = msgs > 0 ? errors / msgs : 0;
+      return {
+        hour,
+        rate,
+        errors,
+        msgs,
+      };
+    })
+    .filter((entry) => entry.msgs > 0 && entry.errors > 0)
+    .toSorted((a, b) => b.rate - a.rate)
+    .slice(0, 5)
+    .map((entry) => ({
+      label: formatHourLabel(entry.hour),
+      value: `${(entry.rate * 100).toFixed(2)}%`,
+      sub: `${Math.round(entry.errors)} errors · ${Math.round(entry.msgs)} msgs`,
+    }));
+}
+
+type UsageMosaicStats = {
+  hasData: boolean;
+  totalTokens: number;
+  hourTotals: number[];
+  weekdayTotals: Array<{ label: string; tokens: number }>;
+};
+
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+function getZonedHour(date: Date, zone: "local" | "utc"): number {
+  return zone === "utc" ? date.getUTCHours() : date.getHours();
+}
+
+function getZonedWeekday(date: Date, zone: "local" | "utc"): number {
+  return zone === "utc" ? date.getUTCDay() : date.getDay();
+}
+
+function setToHourEnd(date: Date, zone: "local" | "utc"): Date {
+  const next = new Date(date);
+  if (zone === "utc") {
+    next.setUTCMinutes(59, 59, 999);
+  } else {
+    next.setMinutes(59, 59, 999);
+  }
+  return next;
+}
+
+function buildUsageMosaicStats(
+  sessions: UsageSessionEntry[],
+  timeZone: "local" | "utc",
+): UsageMosaicStats {
+  const hourTotals = Array.from({ length: 24 }, () => 0);
+  const weekdayTotals = Array.from({ length: 7 }, () => 0);
+  let totalTokens = 0;
+  let hasData = false;
+
+  for (const session of sessions) {
+    const usage = session.usage;
+    if (!usage || !usage.totalTokens || usage.totalTokens <= 0) {
+      continue;
+    }
+    totalTokens += usage.totalTokens;
+
+    const start = usage.firstActivity ?? session.updatedAt;
+    const end = usage.lastActivity ?? session.updatedAt;
+    if (!start || !end) {
+      continue;
+    }
+    hasData = true;
+
+    const startMs = Math.min(start, end);
+    const endMs = Math.max(start, end);
+    const durationMs = Math.max(endMs - startMs, 1);
+    const totalMinutes = durationMs / 60000;
+
+    let cursor = startMs;
+    while (cursor < endMs) {
+      const date = new Date(cursor);
+      const hour = getZonedHour(date, timeZone);
+      const weekday = getZonedWeekday(date, timeZone);
+      const nextHour = setToHourEnd(date, timeZone);
+      const nextMs = Math.min(nextHour.getTime(), endMs);
+      const minutes = Math.max((nextMs - cursor) / 60000, 0);
+      const share = minutes / totalMinutes;
+      hourTotals[hour] += usage.totalTokens * share;
+      weekdayTotals[weekday] += usage.totalTokens * share;
+      cursor = nextMs + 1;
+    }
+  }
+
+  const weekdayLabels = WEEKDAYS.map((label, index) => ({
+    label,
+    tokens: weekdayTotals[index],
+  }));
+
+  return {
+    hasData,
+    totalTokens,
+    hourTotals,
+    weekdayTotals: weekdayLabels,
+  };
+}
+
+function renderUsageMosaic(
+  sessions: UsageSessionEntry[],
+  timeZone: "local" | "utc",
+  selectedHours: number[],
+  onSelectHour: (hour: number, shiftKey: boolean) => void,
+) {
+  const stats = buildUsageMosaicStats(sessions, timeZone);
+  if (!stats.hasData) {
+    return html`
+      <div class="card usage-mosaic">
+        <div class="usage-mosaic-header">
+          <div>
+            <div class="usage-mosaic-title">Activity by Time</div>
+            <div class="usage-mosaic-sub">Estimates require session timestamps.</div>
+          </div>
+          <div class="usage-mosaic-total">${formatTokens(0)} tokens</div>
+        </div>
+        <div class="muted" style="padding: 12px; text-align: center;">No timeline data yet.</div>
+      </div>
+    `;
+  }
+
+  const maxHour = Math.max(...stats.hourTotals, 1);
+  const maxWeekday = Math.max(...stats.weekdayTotals.map((d) => d.tokens), 1);
+
+  return html`
+    <div class="card usage-mosaic">
+      <div class="usage-mosaic-header">
+        <div>
+          <div class="usage-mosaic-title">Activity by Time</div>
+          <div class="usage-mosaic-sub">
+            Estimated from session spans (first/last activity). Time zone: ${timeZone === "utc" ? "UTC" : "Local"}.
+          </div>
+        </div>
+        <div class="usage-mosaic-total">${formatTokens(stats.totalTokens)} tokens</div>
+      </div>
+      <div class="usage-mosaic-grid">
+        <div class="usage-mosaic-section">
+          <div class="usage-mosaic-section-title">Day of Week</div>
+          <div class="usage-daypart-grid">
+            ${stats.weekdayTotals.map((part) => {
+              const intensity = Math.min(part.tokens / maxWeekday, 1);
+              const bg =
+                part.tokens > 0 ? `rgba(255, 77, 77, ${0.12 + intensity * 0.6})` : "transparent";
+              return html`
+                <div class="usage-daypart-cell" style="background: ${bg};">
+                  <div class="usage-daypart-label">${part.label}</div>
+                  <div class="usage-daypart-value">${formatTokens(part.tokens)}</div>
+                </div>
+              `;
+            })}
+          </div>
+        </div>
+        <div class="usage-mosaic-section">
+          <div class="usage-mosaic-section-title">
+            <span>Hours</span>
+            <span class="usage-mosaic-sub">0 → 23</span>
+          </div>
+          <div class="usage-hour-grid">
+            ${stats.hourTotals.map((value, hour) => {
+              const intensity = Math.min(value / maxHour, 1);
+              const bg = value > 0 ? `rgba(255, 77, 77, ${0.08 + intensity * 0.7})` : "transparent";
+              const title = `${hour}:00 · ${formatTokens(value)} tokens`;
+              const border = intensity > 0.7 ? "rgba(255, 77, 77, 0.6)" : "rgba(255, 77, 77, 0.2)";
+              const selected = selectedHours.includes(hour);
+              return html`
+                <div
+                  class="usage-hour-cell ${selected ? "selected" : ""}"
+                  style="background: ${bg}; border-color: ${border};"
+                  title="${title}"
+                  @click=${(e: MouseEvent) => onSelectHour(hour, e.shiftKey)}
+                ></div>
+              `;
+            })}
+          </div>
+          <div class="usage-hour-labels">
+            <span>Midnight</span>
+            <span>4am</span>
+            <span>8am</span>
+            <span>Noon</span>
+            <span>4pm</span>
+            <span>8pm</span>
+          </div>
+          <div class="usage-hour-legend">
+            <span></span>
+            Low → High token density
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 function formatCost(n: number, decimals = 2): string {
   return `$${n.toFixed(decimals)}`;
+}
+
+function formatIsoDate(date: Date): string {
+  return date.toISOString().slice(0, 10);
 }
 
 function formatDurationShort(ms?: number): string {
@@ -1486,251 +2497,33 @@ function formatDurationMs(ms?: number): string {
   return `${seconds}s`;
 }
 
-type UsageQueryTerm = {
-  key?: string;
-  value: string;
-  raw: string;
-};
+function downloadTextFile(filename: string, content: string, type = "text/plain") {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
 
-type UsageQueryResult = {
-  sessions: UsageSessionEntry[];
-  warnings: string[];
-};
+function csvEscape(value: string): string {
+  if (value.includes('"') || value.includes(",") || value.includes("\n")) {
+    return `"${value.replace(/"/g, '""')}"`;
+  }
+  return value;
+}
 
-const QUERY_KEYS = new Set([
-  "agent",
-  "channel",
-  "chat",
-  "provider",
-  "model",
-  "tool",
-  "label",
-  "session",
-  "id",
-  "has",
-  "mintokens",
-  "maxtokens",
-  "mincost",
-  "maxcost",
-  "minmessages",
-  "maxmessages",
-]);
-
-const normalizeQueryText = (value: string): string => value.trim().toLowerCase();
-
-const parseQueryNumber = (value: string): number | null => {
-  let raw = value.trim().toLowerCase();
-  if (!raw) {
-    return null;
-  }
-  if (raw.startsWith("$")) {
-    raw = raw.slice(1);
-  }
-  let multiplier = 1;
-  if (raw.endsWith("k")) {
-    multiplier = 1_000;
-    raw = raw.slice(0, -1);
-  } else if (raw.endsWith("m")) {
-    multiplier = 1_000_000;
-    raw = raw.slice(0, -1);
-  }
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed)) {
-    return null;
-  }
-  return parsed * multiplier;
-};
-
-const extractQueryTerms = (query: string): UsageQueryTerm[] => {
-  const rawTokens = query.match(/"[^"]+"|\\S+/g) ?? [];
-  return rawTokens.map((token) => {
-    const cleaned = token.replace(/^"|"$/g, "");
-    const idx = cleaned.indexOf(":");
-    if (idx > 0) {
-      const key = cleaned.slice(0, idx);
-      const value = cleaned.slice(idx + 1);
-      return { key, value, raw: cleaned };
-    }
-    return { value: cleaned, raw: cleaned };
-  });
-};
-
-const getSessionText = (session: UsageSessionEntry): string[] => {
-  const items: Array<string | undefined> = [session.label, session.key, session.sessionId];
-  return items.filter((item): item is string => Boolean(item)).map((item) => item.toLowerCase());
-};
-
-const getSessionProviders = (session: UsageSessionEntry): string[] => {
-  const providers = new Set<string>();
-  if (session.modelProvider) {
-    providers.add(session.modelProvider.toLowerCase());
-  }
-  if (session.providerOverride) {
-    providers.add(session.providerOverride.toLowerCase());
-  }
-  if (session.origin?.provider) {
-    providers.add(session.origin.provider.toLowerCase());
-  }
-  for (const entry of session.usage?.modelUsage ?? []) {
-    if (entry.provider) {
-      providers.add(entry.provider.toLowerCase());
-    }
-  }
-  return Array.from(providers);
-};
-
-const getSessionModels = (session: UsageSessionEntry): string[] => {
-  const models = new Set<string>();
-  if (session.model) {
-    models.add(session.model.toLowerCase());
-  }
-  for (const entry of session.usage?.modelUsage ?? []) {
-    if (entry.model) {
-      models.add(entry.model.toLowerCase());
-    }
-  }
-  return Array.from(models);
-};
-
-const getSessionTools = (session: UsageSessionEntry): string[] =>
-  (session.usage?.toolUsage?.tools ?? []).map((tool) => tool.name.toLowerCase());
-
-const matchesUsageQuery = (session: UsageSessionEntry, term: UsageQueryTerm): boolean => {
-  const value = normalizeQueryText(term.value ?? "");
-  if (!value) {
-    return true;
-  }
-  if (!term.key) {
-    return getSessionText(session).some((text) => text.includes(value));
-  }
-
-  const key = normalizeQueryText(term.key);
-  switch (key) {
-    case "agent":
-      return session.agentId?.toLowerCase().includes(value) ?? false;
-    case "channel":
-      return session.channel?.toLowerCase().includes(value) ?? false;
-    case "chat":
-      return session.chatType?.toLowerCase().includes(value) ?? false;
-    case "provider":
-      return getSessionProviders(session).some((provider) => provider.includes(value));
-    case "model":
-      return getSessionModels(session).some((model) => model.includes(value));
-    case "tool":
-      return getSessionTools(session).some((tool) => tool.includes(value));
-    case "label":
-      return session.label?.toLowerCase().includes(value) ?? false;
-    case "session":
-    case "id":
-      return (
-        session.key.toLowerCase().includes(value) ||
-        (session.sessionId?.toLowerCase().includes(value) ?? false)
-      );
-    case "has":
-      switch (value) {
-        case "tools":
-          return (session.usage?.toolUsage?.totalCalls ?? 0) > 0;
-        case "errors":
-          return (session.usage?.messageCounts?.errors ?? 0) > 0;
-        case "context":
-          return Boolean(session.contextWeight);
-        case "usage":
-          return Boolean(session.usage);
-        case "model":
-          return getSessionModels(session).length > 0;
-        case "provider":
-          return getSessionProviders(session).length > 0;
-        default:
-          return true;
+function toCsvRow(values: Array<string | number | undefined | null>): string {
+  return values
+    .map((val) => {
+      if (val === undefined || val === null) {
+        return "";
       }
-    case "mintokens": {
-      const threshold = parseQueryNumber(value);
-      if (threshold === null) {
-        return true;
-      }
-      return (session.usage?.totalTokens ?? 0) >= threshold;
-    }
-    case "maxtokens": {
-      const threshold = parseQueryNumber(value);
-      if (threshold === null) {
-        return true;
-      }
-      return (session.usage?.totalTokens ?? 0) <= threshold;
-    }
-    case "mincost": {
-      const threshold = parseQueryNumber(value);
-      if (threshold === null) {
-        return true;
-      }
-      return (session.usage?.totalCost ?? 0) >= threshold;
-    }
-    case "maxcost": {
-      const threshold = parseQueryNumber(value);
-      if (threshold === null) {
-        return true;
-      }
-      return (session.usage?.totalCost ?? 0) <= threshold;
-    }
-    case "minmessages": {
-      const threshold = parseQueryNumber(value);
-      if (threshold === null) {
-        return true;
-      }
-      return (session.usage?.messageCounts?.total ?? 0) >= threshold;
-    }
-    case "maxmessages": {
-      const threshold = parseQueryNumber(value);
-      if (threshold === null) {
-        return true;
-      }
-      return (session.usage?.messageCounts?.total ?? 0) <= threshold;
-    }
-    default:
-      return true;
-  }
-};
-
-const filterSessionsByQuery = (sessions: UsageSessionEntry[], query: string): UsageQueryResult => {
-  const terms = extractQueryTerms(query);
-  if (terms.length === 0) {
-    return { sessions, warnings: [] };
-  }
-
-  const warnings: string[] = [];
-  for (const term of terms) {
-    if (!term.key) {
-      continue;
-    }
-    const normalizedKey = normalizeQueryText(term.key);
-    if (!QUERY_KEYS.has(normalizedKey)) {
-      warnings.push(`Unknown filter: ${term.key}`);
-      continue;
-    }
-    if (term.value === "") {
-      warnings.push(`Missing value for ${term.key}`);
-    }
-    if (normalizedKey === "has") {
-      const allowed = new Set(["tools", "errors", "context", "usage", "model", "provider"]);
-      if (term.value && !allowed.has(normalizeQueryText(term.value))) {
-        warnings.push(`Unknown has:${term.value}`);
-      }
-    }
-    if (
-      ["mintokens", "maxtokens", "mincost", "maxcost", "minmessages", "maxmessages"].includes(
-        normalizedKey,
-      )
-    ) {
-      if (term.value && parseQueryNumber(term.value) === null) {
-        warnings.push(`Invalid number for ${term.key}`);
-      }
-    }
-  }
-
-  const filtered = sessions.filter((session) =>
-    terms.every((term) => matchesUsageQuery(session, term)),
-  );
-  return { sessions: filtered, warnings };
-};
+      return csvEscape(String(val));
+    })
+    .join(",");
+}
 
 const emptyUsageTotals = (): UsageTotals => ({
   input: 0,
@@ -2042,80 +2835,93 @@ const buildUsageInsightStats = (
   };
 };
 
-type ModelDailyTrend = {
-  key: string;
-  label: string;
-  provider?: string;
-  model?: string;
-  totalCost: number;
-  totalTokens: number;
-  series: number[];
-  maxCost: number;
+const buildSessionsCsv = (sessions: UsageSessionEntry[]): string => {
+  const rows = [
+    toCsvRow([
+      "key",
+      "label",
+      "agentId",
+      "channel",
+      "provider",
+      "model",
+      "updatedAt",
+      "durationMs",
+      "messages",
+      "errors",
+      "toolCalls",
+      "inputTokens",
+      "outputTokens",
+      "cacheReadTokens",
+      "cacheWriteTokens",
+      "totalTokens",
+      "totalCost",
+    ]),
+  ];
+
+  for (const session of sessions) {
+    const usage = session.usage;
+    rows.push(
+      toCsvRow([
+        session.key,
+        session.label ?? "",
+        session.agentId ?? "",
+        session.channel ?? "",
+        session.modelProvider ?? session.providerOverride ?? "",
+        session.model ?? session.modelOverride ?? "",
+        session.updatedAt ? new Date(session.updatedAt).toISOString() : "",
+        usage?.durationMs ?? "",
+        usage?.messageCounts?.total ?? "",
+        usage?.messageCounts?.errors ?? "",
+        usage?.messageCounts?.toolCalls ?? "",
+        usage?.input ?? "",
+        usage?.output ?? "",
+        usage?.cacheRead ?? "",
+        usage?.cacheWrite ?? "",
+        usage?.totalTokens ?? "",
+        usage?.totalCost ?? "",
+      ]),
+    );
+  }
+
+  return rows.join("\n");
 };
 
-const buildModelDailyTrends = (
-  modelDaily: UsageAggregates["modelDaily"] | undefined,
-  days: string[],
-): { days: string[]; trends: ModelDailyTrend[] } => {
-  if (!modelDaily || modelDaily.length === 0) {
-    return { days, trends: [] };
+const buildDailyCsv = (daily: CostDailyEntry[]): string => {
+  const rows = [
+    toCsvRow([
+      "date",
+      "inputTokens",
+      "outputTokens",
+      "cacheReadTokens",
+      "cacheWriteTokens",
+      "totalTokens",
+      "inputCost",
+      "outputCost",
+      "cacheReadCost",
+      "cacheWriteCost",
+      "totalCost",
+    ]),
+  ];
+
+  for (const day of daily) {
+    rows.push(
+      toCsvRow([
+        day.date,
+        day.input,
+        day.output,
+        day.cacheRead,
+        day.cacheWrite,
+        day.totalTokens,
+        day.inputCost ?? "",
+        day.outputCost ?? "",
+        day.cacheReadCost ?? "",
+        day.cacheWriteCost ?? "",
+        day.totalCost,
+      ]),
+    );
   }
 
-  const resolvedDays =
-    days.length > 0
-      ? days
-      : Array.from(new Set(modelDaily.map((entry) => entry.date))).toSorted((a, b) =>
-          a.localeCompare(b),
-        );
-
-  const modelMap = new Map<
-    string,
-    {
-      provider?: string;
-      model?: string;
-      totalCost: number;
-      totalTokens: number;
-      costByDay: Map<string, number>;
-    }
-  >();
-
-  for (const entry of modelDaily) {
-    const key = `${entry.provider ?? "unknown"}::${entry.model ?? "unknown"}`;
-    const existing = modelMap.get(key) ?? {
-      provider: entry.provider,
-      model: entry.model,
-      totalCost: 0,
-      totalTokens: 0,
-      costByDay: new Map<string, number>(),
-    };
-    existing.totalCost += entry.cost;
-    existing.totalTokens += entry.tokens;
-    existing.costByDay.set(entry.date, (existing.costByDay.get(entry.date) ?? 0) + entry.cost);
-    modelMap.set(key, existing);
-  }
-
-  const trends = Array.from(modelMap.entries()).map(([key, entry]) => {
-    const series = resolvedDays.map((day) => entry.costByDay.get(day) ?? 0);
-    const maxCost = Math.max(...series, 0.0001);
-    const label = entry.provider
-      ? `${entry.provider} / ${entry.model ?? "unknown"}`
-      : (entry.model ?? "unknown");
-    return {
-      key,
-      label,
-      provider: entry.provider,
-      model: entry.model,
-      totalCost: entry.totalCost,
-      totalTokens: entry.totalTokens,
-      series,
-      maxCost,
-    };
-  });
-
-  return {
-    days: resolvedDays,
-    trends: trends.toSorted((a, b) => b.totalCost - a.totalCost),
-  };
+  return rows.join("\n");
 };
 
 type QuerySuggestion = {
@@ -2129,6 +2935,9 @@ const buildQuerySuggestions = (
   aggregates?: UsageAggregates | null,
 ): QuerySuggestion[] => {
   const trimmed = query.trim();
+  if (!trimmed) {
+    return [];
+  }
   const tokens = trimmed.length ? trimmed.split(/\s+/) : [];
   const lastToken = tokens.length ? tokens[tokens.length - 1] : "";
   const [rawKey, rawValue] = lastToken.includes(":")
@@ -2224,6 +3033,42 @@ const applySuggestionToQuery = (query: string, suggestion: string): string => {
   return `${tokens.join(" ")} `;
 };
 
+const normalizeQueryText = (value: string): string => value.trim().toLowerCase();
+
+const addQueryToken = (query: string, token: string): string => {
+  const trimmed = query.trim();
+  if (!trimmed) {
+    return `${token} `;
+  }
+  const tokens = trimmed.split(/\s+/);
+  const last = tokens[tokens.length - 1] ?? "";
+  const tokenKey = token.includes(":") ? token.split(":")[0] : null;
+  const lastKey = last.includes(":") ? last.split(":")[0] : null;
+  if (last.endsWith(":") && tokenKey && lastKey === tokenKey) {
+    tokens[tokens.length - 1] = token;
+    return `${tokens.join(" ")} `;
+  }
+  if (tokens.includes(token)) {
+    return `${tokens.join(" ")} `;
+  }
+  return `${tokens.join(" ")} ${token} `;
+};
+
+const removeQueryToken = (query: string, token: string): string => {
+  const tokens = query.trim().split(/\s+/).filter(Boolean);
+  const next = tokens.filter((entry) => entry !== token);
+  return next.length ? `${next.join(" ")} ` : "";
+};
+
+const setQueryTokensForKey = (query: string, key: string, values: string[]): string => {
+  const normalizedKey = normalizeQueryText(key);
+  const tokens = extractQueryTerms(query)
+    .filter((term) => normalizeQueryText(term.key ?? "") !== normalizedKey)
+    .map((term) => term.raw);
+  const next = [...tokens, ...values.map((value) => `${key}:${value}`)];
+  return next.length ? `${next.join(" ")} ` : "";
+};
+
 function pct(part: number, total: number): number {
   if (total === 0) {
     return 0;
@@ -2262,13 +3107,16 @@ function getCostBreakdown(totals: UsageTotals) {
 
 function renderFilterChips(
   selectedDays: string[],
+  selectedHours: number[],
   selectedSessions: string[],
   sessions: UsageSessionEntry[],
   onClearDays: () => void,
+  onClearHours: () => void,
   onClearSessions: () => void,
   onClearFilters: () => void,
 ) {
-  const hasFilters = selectedDays.length > 0 || selectedSessions.length > 0;
+  const hasFilters =
+    selectedDays.length > 0 || selectedHours.length > 0 || selectedSessions.length > 0;
   if (!hasFilters) {
     return nothing;
   }
@@ -2288,6 +3136,8 @@ function renderFilterChips(
       : selectedSessions.join(", ");
 
   const daysLabel = selectedDays.length === 1 ? selectedDays[0] : `${selectedDays.length} days`;
+  const hoursLabel =
+    selectedHours.length === 1 ? `${selectedHours[0]}:00` : `${selectedHours.length} hours`;
 
   return html`
     <div class="active-filters">
@@ -2297,6 +3147,16 @@ function renderFilterChips(
             <div class="filter-chip">
               <span class="filter-chip-label">Days: ${daysLabel}</span>
               <button class="filter-chip-remove" @click=${onClearDays} title="Remove filter">×</button>
+            </div>
+          `
+          : nothing
+      }
+      ${
+        selectedHours.length > 0
+          ? html`
+            <div class="filter-chip">
+              <span class="filter-chip-label">Hours: ${hoursLabel}</span>
+              <button class="filter-chip-remove" @click=${onClearHours} title="Remove filter">×</button>
             </div>
           `
           : nothing
@@ -2312,7 +3172,7 @@ function renderFilterChips(
           : nothing
       }
       ${
-        selectedDays.length > 0 && selectedSessions.length > 0
+        (selectedDays.length > 0 || selectedHours.length > 0) && selectedSessions.length > 0
           ? html`
             <button class="btn btn-sm filter-clear-btn" @click=${onClearFilters}>
               Clear All
@@ -2347,12 +3207,12 @@ function renderDailyChartCompact(
 
   // Calculate bar width based on number of days
   const barMaxWidth = daily.length > 30 ? 12 : daily.length > 20 ? 18 : daily.length > 14 ? 24 : 32;
+  const showTotals = daily.length <= 14;
 
   return html`
     <div class="daily-chart-compact">
       <div class="daily-chart-header">
-        <div class="card-title">Daily ${isTokenMode ? "Token" : "Cost"} Usage</div>
-        <div class="chart-toggle small">
+        <div class="chart-toggle small sessions-toggle">
           <button
             class="toggle-btn ${dailyChartMode === "total" ? "active" : ""}"
             @click=${() => onDailyChartModeChange("total")}
@@ -2366,6 +3226,7 @@ function renderDailyChartCompact(
             By Type
           </button>
         </div>
+        <div class="card-title">Daily ${isTokenMode ? "Token" : "Cost"} Usage</div>
       </div>
       <div class="daily-chart">
         <div class="daily-chart-bars" style="--bar-max-width: ${barMaxWidth}px">
@@ -2409,6 +3270,7 @@ function renderDailyChartCompact(
                       `Cache read ${formatCost(d.cacheReadCost ?? 0)}`,
                     ]
                 : [];
+            const totalLabel = isTokenMode ? formatTokens(d.totalTokens) : formatCost(d.totalCost);
             return html`
               <div
                 class="daily-bar-wrapper ${isSelected ? "selected" : ""}"
@@ -2438,6 +3300,7 @@ function renderDailyChartCompact(
                         <div class="daily-bar" style="height: ${heightPct.toFixed(1)}%"></div>
                       `
                 }
+                ${showTotals ? html`<div class="daily-bar-total">${totalLabel}</div>` : nothing}
                 <div class="daily-bar-label" style="${labelStyle}">${shortLabel}</div>
                 <div class="daily-bar-tooltip">
                   <strong>${formatFullDate(d.date)}</strong><br />
@@ -2488,6 +3351,9 @@ function renderCostBreakdownCompact(totals: UsageTotals, mode: "tokens" | "cost"
         <span class="legend-item"><span class="legend-dot cache-write"></span>Cache Write ${isTokenMode ? formatTokens(totals.cacheWrite) : formatCost(breakdown.cacheWrite.cost)}</span>
         <span class="legend-item"><span class="legend-dot cache-read"></span>Cache Read ${isTokenMode ? formatTokens(totals.cacheRead) : formatCost(breakdown.cacheRead.cost)}</span>
       </div>
+      <div class="cost-breakdown-total">
+        Total: ${isTokenMode ? formatTokens(totals.totalTokens) : formatCost(totals.totalCost)}
+      </div>
     </div>
   `;
 }
@@ -2509,9 +3375,9 @@ function renderInsightList(
                   (item) => html`
                     <div class="usage-list-item">
                       <span>${item.label}</span>
-                      <span>
-                        ${item.value}
-                        ${item.sub ? html`<span class="muted"> ${item.sub}</span>` : nothing}
+                      <span class="usage-list-value">
+                        <span>${item.value}</span>
+                        ${item.sub ? html`<span class="usage-list-sub">${item.sub}</span>` : nothing}
                       </span>
                     </div>
                   `,
@@ -2523,41 +3389,25 @@ function renderInsightList(
   `;
 }
 
-function renderModelCostTrends(aggregates: UsageAggregates, days: string[]) {
-  const { trends } = buildModelDailyTrends(aggregates.modelDaily, days);
-  const topTrends = trends.slice(0, 5);
-
+function renderPeakErrorList(
+  title: string,
+  items: Array<{ label: string; value: string; sub?: string }>,
+  emptyLabel: string,
+) {
   return html`
     <div class="usage-insight-card">
-      <div class="usage-insight-title">Model Cost Over Time</div>
+      <div class="usage-insight-title">${title}</div>
       ${
-        topTrends.length === 0
-          ? html`
-              <div class="muted">No model trend data</div>
-            `
+        items.length === 0
+          ? html`<div class="muted">${emptyLabel}</div>`
           : html`
-              <div class="usage-trend-list">
-                ${topTrends.map(
-                  (trend) => html`
-                    <div class="usage-trend-row">
-                      <div class="usage-trend-label">
-                        <div>${trend.label}</div>
-                        <div class="usage-trend-meta">
-                          ${formatTokens(Math.round(trend.totalTokens))} tokens
-                        </div>
-                      </div>
-                      <div class="usage-trend-bars">
-                        ${trend.series.map(
-                          (value) => html`
-                            <div
-                              class="usage-trend-bar"
-                              style="height: ${(value / trend.maxCost) * 100}%"
-                              title=${formatCost(value)}
-                            ></div>
-                          `,
-                        )}
-                      </div>
-                      <div class="usage-trend-value">${formatCost(trend.totalCost)}</div>
+              <div class="usage-error-list">
+                ${items.map(
+                  (item) => html`
+                    <div class="usage-error-row">
+                      <div class="usage-error-date">${item.label}</div>
+                      <div class="usage-error-rate">${item.value}</div>
+                      ${item.sub ? html`<div class="usage-error-sub">${item.sub}</div>` : nothing}
                     </div>
                   `,
                 )}
@@ -2572,7 +3422,8 @@ function renderUsageInsights(
   totals: UsageTotals | null,
   aggregates: UsageAggregates,
   stats: UsageInsightStats,
-  days: string[],
+  showCostHint: boolean,
+  errorHours: Array<{ label: string; value: string; sub?: string }>,
   sessionCount: number,
   totalSessions: number,
 ) {
@@ -2584,13 +3435,10 @@ function renderUsageInsights(
     ? Math.round(totals.totalTokens / aggregates.messages.total)
     : 0;
   const avgCost = aggregates.messages.total ? totals.totalCost / aggregates.messages.total : 0;
+  const cacheBase = totals.input + totals.cacheRead;
+  const cacheHitRate = cacheBase > 0 ? totals.cacheRead / cacheBase : 0;
+  const cacheHitLabel = cacheBase > 0 ? `${(cacheHitRate * 100).toFixed(1)}%` : "—";
   const errorRatePct = stats.errorRate * 100;
-  const latencyLabel = aggregates.latency
-    ? `${formatDurationShort(aggregates.latency.p95Ms)} p95`
-    : "—";
-  const avgLatencyLabel = aggregates.latency
-    ? `${formatDurationShort(aggregates.latency.avgMs)} avg`
-    : "—";
   const throughputLabel =
     stats.throughputTokensPerMin !== undefined
       ? `${formatTokens(Math.round(stats.throughputTokensPerMin))} tok/min`
@@ -2600,15 +3448,22 @@ function renderUsageInsights(
       ? `${formatCost(stats.throughputCostPerMin, 4)} / min`
       : "—";
   const avgDurationLabel = stats.durationCount > 0 ? formatDurationShort(stats.avgDurationMs) : "—";
+  const cacheHint = "Cache hit rate = cache read / (input + cache read). Higher is better.";
+  const errorHint = "Error rate = errors / total messages. Lower is better.";
+  const throughputHint = "Throughput shows tokens per minute over active time. Higher is better.";
+  const tokensHint = "Average tokens per message in this range.";
+  const costHint = showCostHint
+    ? "Average cost per message when providers report costs. Cost data is missing for some or all sessions in this range."
+    : "Average cost per message when providers report costs.";
 
   const errorDays = aggregates.daily
-    .filter((day) => day.messages > 0)
+    .filter((day) => day.messages > 0 && day.errors > 0)
     .map((day) => {
       const rate = day.errors / day.messages;
       return {
         label: formatDayLabel(day.date),
         value: `${(rate * 100).toFixed(2)}%`,
-        sub: `${day.errors} errors / ${day.messages} msgs`,
+        sub: `${day.errors} errors · ${day.messages} msgs · ${formatTokens(day.tokens)}`,
         rate,
       };
     })
@@ -2647,52 +3502,81 @@ function renderUsageInsights(
       <div class="card-title">Usage Overview</div>
       <div class="usage-summary-grid">
         <div class="usage-summary-card">
-          <div class="usage-summary-title">Messages</div>
+          <div class="usage-summary-title">
+            Messages
+            <span class="usage-summary-hint" title="Total user + assistant messages in range.">?</span>
+          </div>
           <div class="usage-summary-value">${aggregates.messages.total}</div>
           <div class="usage-summary-sub">
             ${aggregates.messages.user} user · ${aggregates.messages.assistant} assistant
           </div>
         </div>
         <div class="usage-summary-card">
-          <div class="usage-summary-title">Tool Calls</div>
+          <div class="usage-summary-title">
+            Tool Calls
+            <span class="usage-summary-hint" title="Total tool call count across sessions.">?</span>
+          </div>
           <div class="usage-summary-value">${aggregates.tools.totalCalls}</div>
           <div class="usage-summary-sub">${aggregates.tools.uniqueTools} tools used</div>
         </div>
         <div class="usage-summary-card">
-          <div class="usage-summary-title">Errors</div>
+          <div class="usage-summary-title">
+            Errors
+            <span class="usage-summary-hint" title="Total message/tool errors in range.">?</span>
+          </div>
           <div class="usage-summary-value">${aggregates.messages.errors}</div>
           <div class="usage-summary-sub">${aggregates.messages.toolResults} tool results</div>
         </div>
         <div class="usage-summary-card">
-          <div class="usage-summary-title">Avg Tokens / Msg</div>
+          <div class="usage-summary-title">
+            Avg Tokens / Msg
+            <span class="usage-summary-hint" title=${tokensHint}>?</span>
+          </div>
           <div class="usage-summary-value">${formatTokens(avgTokens)}</div>
           <div class="usage-summary-sub">Across ${aggregates.messages.total || 0} messages</div>
         </div>
         <div class="usage-summary-card">
-          <div class="usage-summary-title">Avg Cost / Msg</div>
+          <div class="usage-summary-title">
+            Avg Cost / Msg
+            <span class="usage-summary-hint" title=${costHint}>?</span>
+          </div>
           <div class="usage-summary-value">${formatCost(avgCost, 4)}</div>
           <div class="usage-summary-sub">${formatCost(totals.totalCost)} total</div>
         </div>
         <div class="usage-summary-card">
-          <div class="usage-summary-title">Sessions</div>
+          <div class="usage-summary-title">
+            Sessions
+            <span class="usage-summary-hint" title="Distinct sessions in the range.">?</span>
+          </div>
           <div class="usage-summary-value">${sessionCount}</div>
           <div class="usage-summary-sub">of ${totalSessions} in range</div>
         </div>
         <div class="usage-summary-card">
-          <div class="usage-summary-title">Latency</div>
-          <div class="usage-summary-value">${latencyLabel}</div>
-          <div class="usage-summary-sub">${avgLatencyLabel}</div>
-        </div>
-        <div class="usage-summary-card">
-          <div class="usage-summary-title">Throughput</div>
+          <div class="usage-summary-title">
+            Throughput
+            <span class="usage-summary-hint" title=${throughputHint}>?</span>
+          </div>
           <div class="usage-summary-value">${throughputLabel}</div>
           <div class="usage-summary-sub">${throughputCostLabel}</div>
         </div>
         <div class="usage-summary-card">
-          <div class="usage-summary-title">Error Rate</div>
-          <div class="usage-summary-value">${errorRatePct.toFixed(2)}%</div>
+          <div class="usage-summary-title">
+            Error Rate
+            <span class="usage-summary-hint" title=${errorHint}>?</span>
+          </div>
+          <div class="usage-summary-value ${errorRatePct > 5 ? "bad" : errorRatePct > 1 ? "warn" : "good"}">${errorRatePct.toFixed(2)}%</div>
           <div class="usage-summary-sub">
             ${aggregates.messages.errors} errors · ${avgDurationLabel} avg session
+          </div>
+        </div>
+        <div class="usage-summary-card">
+          <div class="usage-summary-title">
+            Cache Hit Rate
+            <span class="usage-summary-hint" title=${cacheHint}>?</span>
+          </div>
+          <div class="usage-summary-value ${cacheHitRate > 0.6 ? "good" : cacheHitRate > 0.3 ? "warn" : "bad"}">${cacheHitLabel}</div>
+          <div class="usage-summary-sub">
+            ${formatTokens(totals.cacheRead)} cached · ${formatTokens(cacheBase)} prompt
           </div>
         </div>
       </div>
@@ -2702,8 +3586,8 @@ function renderUsageInsights(
         ${renderInsightList("Top Tools", topTools, "No tool calls")}
         ${renderInsightList("Top Agents", topAgents, "No agent data")}
         ${renderInsightList("Top Channels", topChannels, "No channel data")}
-        ${renderModelCostTrends(aggregates, days)}
-        ${renderInsightList("Peak Error Days", errorDays, "No error data")}
+        ${renderPeakErrorList("Peak Error Days", errorDays, "No error data")}
+        ${renderPeakErrorList("Peak Error Hours", errorHours, "No error data")}
       </div>
     </section>
   `;
@@ -2714,11 +3598,35 @@ function renderSessionsCard(
   selectedSessions: string[],
   selectedDays: string[],
   isTokenMode: boolean,
+  sessionSort: "tokens" | "cost" | "recent" | "messages" | "errors",
+  sessionSortDir: "asc" | "desc",
+  recentSessions: string[],
+  sessionsTab: "all" | "recent",
   onSelectSession: (key: string, shiftKey: boolean) => void,
+  onSessionSortChange: (sort: "tokens" | "cost" | "recent" | "messages" | "errors") => void,
+  onSessionSortDirChange: (dir: "asc" | "desc") => void,
+  onSessionsTabChange: (tab: "all" | "recent") => void,
   visibleColumns: UsageColumnId[],
   totalSessions: number,
+  onClearSessions: () => void,
 ) {
   const showColumn = (id: UsageColumnId) => visibleColumns.includes(id);
+  const formatSessionListLabel = (s: UsageSessionEntry): string => {
+    const raw = s.label || s.key;
+    // Agent session keys often include a token query param; remove it for readability.
+    if (raw.startsWith("agent:") && raw.includes("?token=")) {
+      return raw.slice(0, raw.indexOf("?token="));
+    }
+    return raw;
+  };
+  const copySessionName = async (s: UsageSessionEntry) => {
+    const text = formatSessionListLabel(s);
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      // Best effort; clipboard can fail on insecure contexts or denied permission.
+    }
+  };
 
   const buildSessionMeta = (s: UsageSessionEntry): string[] => {
     const parts: string[] = [];
@@ -2768,7 +3676,39 @@ function renderSessionsCard(
     return isTokenMode ? (usage.totalTokens ?? 0) : (usage.totalCost ?? 0);
   };
 
-  const maxVal = Math.max(...sessions.map(getSessionValue), isTokenMode ? 1 : 0.001);
+  const sortedSessions = [...sessions].toSorted((a, b) => {
+    switch (sessionSort) {
+      case "recent":
+        return (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
+      case "messages":
+        return (b.usage?.messageCounts?.total ?? 0) - (a.usage?.messageCounts?.total ?? 0);
+      case "errors":
+        return (b.usage?.messageCounts?.errors ?? 0) - (a.usage?.messageCounts?.errors ?? 0);
+      case "cost":
+        return getSessionValue(b) - getSessionValue(a);
+      case "tokens":
+      default:
+        return getSessionValue(b) - getSessionValue(a);
+    }
+  });
+  const sortedWithDir = sessionSortDir === "asc" ? [...sortedSessions].reverse() : sortedSessions;
+
+  const maxVal = Math.max(...sortedWithDir.map(getSessionValue), isTokenMode ? 1 : 0.001);
+  const totalValue = sortedWithDir.reduce((sum, session) => sum + getSessionValue(session), 0);
+  const avgValue = sortedWithDir.length ? totalValue / sortedWithDir.length : 0;
+  const totalErrors = sortedWithDir.reduce(
+    (sum, session) => sum + (session.usage?.messageCounts?.errors ?? 0),
+    0,
+  );
+
+  const selectedSet = new Set(selectedSessions);
+  const selectedEntries = sortedWithDir.filter((s) => selectedSet.has(s.key));
+  const selectedCount = selectedEntries.length;
+  const recentSet = new Set(recentSessions);
+  const sessionMap = new Map(sortedWithDir.map((s) => [s.key, s]));
+  const recentEntries = recentSessions
+    .map((key) => sessionMap.get(key))
+    .filter((entry): entry is UsageSessionEntry => Boolean(entry));
 
   return html`
     <div class="card sessions-card">
@@ -2778,48 +3718,186 @@ function renderSessionsCard(
           ${sessions.length} shown${totalSessions !== sessions.length ? ` · ${totalSessions} total` : ""}
         </div>
       </div>
+      <div class="sessions-card-meta">
+        <div class="sessions-card-stats">
+          <span>${isTokenMode ? formatTokens(avgValue) : formatCost(avgValue)} avg</span>
+          <span>${totalErrors} errors</span>
+        </div>
+        <div class="chart-toggle small">
+          <button
+            class="toggle-btn ${sessionsTab === "all" ? "active" : ""}"
+            @click=${() => onSessionsTabChange("all")}
+          >
+            All
+          </button>
+          <button
+            class="toggle-btn ${sessionsTab === "recent" ? "active" : ""}"
+            @click=${() => onSessionsTabChange("recent")}
+          >
+            Recently viewed
+          </button>
+        </div>
+        <label class="sessions-sort">
+          <span>Sort</span>
+          <select
+            @change=${(e: Event) => onSessionSortChange((e.target as HTMLSelectElement).value as typeof sessionSort)}
+          >
+            <option value="cost" ?selected=${sessionSort === "cost"}>Cost</option>
+            <option value="errors" ?selected=${sessionSort === "errors"}>Errors</option>
+            <option value="messages" ?selected=${sessionSort === "messages"}>Messages</option>
+            <option value="recent" ?selected=${sessionSort === "recent"}>Recent</option>
+            <option value="tokens" ?selected=${sessionSort === "tokens"}>Tokens</option>
+          </select>
+        </label>
+        <button
+          class="btn btn-sm sessions-action-btn icon"
+          @click=${() => onSessionSortDirChange(sessionSortDir === "desc" ? "asc" : "desc")}
+          title=${sessionSortDir === "desc" ? "Descending" : "Ascending"}
+        >
+          ${sessionSortDir === "desc" ? "↓" : "↑"}
+        </button>
+        ${
+          selectedCount > 0
+            ? html`
+                <button class="btn btn-sm sessions-action-btn sessions-clear-btn" @click=${onClearSessions}>
+                  Clear Selection
+                </button>
+              `
+            : nothing
+        }
+      </div>
       ${
-        selectedSessions.length === 0
-          ? html`
-              <div class="sessions-card-hint">↓ Click a session to view timeline, conversation & context</div>
-            `
-          : nothing
+        sessionsTab === "recent"
+          ? recentEntries.length === 0
+            ? html`
+                <div class="muted" style="padding: 20px; text-align: center">No recent sessions</div>
+              `
+            : html`
+                <div class="session-bars" style="max-height: 220px; margin-top: 6px;">
+                  ${recentEntries.map((s) => {
+                    const value = getSessionValue(s);
+                    const normalized = maxVal > 0 ? Math.sqrt(value / maxVal) : 0;
+                    const widthPct = value > 0 ? Math.max(normalized * 100, 6) : 0;
+                    const isSelected = selectedSet.has(s.key);
+                    const displayLabel = formatSessionListLabel(s);
+                    const meta = buildSessionMeta(s);
+                    return html`
+                      <div
+                        class="session-bar-row ${isSelected ? "selected" : ""}"
+                        @click=${(e: MouseEvent) => onSelectSession(s.key, e.shiftKey)}
+                        title="${s.key}"
+                      >
+                        <div class="session-bar-label">
+                          <div class="session-bar-title">${displayLabel}</div>
+                          ${meta.length > 0 ? html`<div class="session-bar-meta">${meta.join(" · ")}</div>` : nothing}
+                        </div>
+                        <div class="session-bar-track" style="display: none;"></div>
+                        <div class="session-bar-actions">
+                          <button
+                            class="session-copy-btn"
+                            title="Copy session name"
+                            @click=${(e: MouseEvent) => {
+                              e.stopPropagation();
+                              void copySessionName(s);
+                            }}
+                          >
+                            Copy
+                          </button>
+                          <div class="session-bar-value">${isTokenMode ? formatTokens(value) : formatCost(value)}</div>
+                        </div>
+                      </div>
+                    `;
+                  })}
+                </div>
+              `
+          : sessions.length === 0
+            ? html`
+                <div class="muted" style="padding: 20px; text-align: center">No sessions in range</div>
+              `
+            : html`
+                <div class="session-bars">
+                  ${sortedWithDir.slice(0, 50).map((s) => {
+                    const value = getSessionValue(s);
+                    const normalized = maxVal > 0 ? Math.sqrt(value / maxVal) : 0;
+                    const widthPct = value > 0 ? Math.max(normalized * 100, 6) : 0;
+                    const isSelected = selectedSessions.includes(s.key);
+                    const displayLabel = formatSessionListLabel(s);
+                    const meta = buildSessionMeta(s);
+
+                    return html`
+                      <div
+                        class="session-bar-row ${isSelected ? "selected" : ""}"
+                        @click=${(e: MouseEvent) => onSelectSession(s.key, e.shiftKey)}
+                        title="${s.key}"
+                      >
+                        <div class="session-bar-label">
+                          <div class="session-bar-title">${displayLabel}</div>
+                          ${meta.length > 0 ? html`<div class="session-bar-meta">${meta.join(" · ")}</div>` : nothing}
+                        </div>
+                        <div class="session-bar-track" style="display: none;"></div>
+                        <div class="session-bar-actions">
+                          <button
+                            class="session-copy-btn"
+                            title="Copy session name"
+                            @click=${(e: MouseEvent) => {
+                              e.stopPropagation();
+                              void copySessionName(s);
+                            }}
+                          >
+                            Copy
+                          </button>
+                          <div class="session-bar-value">${isTokenMode ? formatTokens(value) : formatCost(value)}</div>
+                        </div>
+                      </div>
+                    `;
+                  })}
+                  ${sessions.length > 50 ? html`<div class="muted" style="padding: 8px; text-align: center; font-size: 11px;">+${sessions.length - 50} more</div>` : nothing}
+                </div>
+              `
       }
       ${
-        sessions.length === 0
+        selectedCount > 1
           ? html`
-              <div class="muted" style="padding: 20px; text-align: center">No sessions in range</div>
-            `
-          : html`
-          <div class="session-bars">
-            ${sessions.slice(0, 50).map((s) => {
-              const value = getSessionValue(s);
-              const widthPct = (value / maxVal) * 100;
-              const isSelected = selectedSessions.includes(s.key);
-              const label = s.label || s.key;
-              const displayLabel = label.length > 30 ? label.slice(0, 30) + "…" : label;
-              const meta = buildSessionMeta(s);
-
-              return html`
-                <div
-                  class="session-bar-row ${isSelected ? "selected" : ""}"
-                  @click=${(e: MouseEvent) => onSelectSession(s.key, e.shiftKey)}
-                  title="${s.key}"
-                >
-                  <div class="session-bar-label">
-                    <div>${displayLabel}</div>
-                    ${meta.length > 0 ? html`<div class="session-bar-meta">${meta.join(" · ")}</div>` : nothing}
-                  </div>
-                  <div class="session-bar-track">
-                    <div class="session-bar-fill" style="width: ${widthPct.toFixed(1)}%"></div>
-                  </div>
-                  <div class="session-bar-value">${isTokenMode ? formatTokens(value) : formatCost(value)}</div>
+              <div style="margin-top: 10px;">
+                <div class="sessions-card-count">Selected (${selectedCount})</div>
+                <div class="session-bars" style="max-height: 160px; margin-top: 6px;">
+                  ${selectedEntries.map((s) => {
+                    const value = getSessionValue(s);
+                    const normalized = maxVal > 0 ? Math.sqrt(value / maxVal) : 0;
+                    const widthPct = value > 0 ? Math.max(normalized * 100, 6) : 0;
+                    const displayLabel = formatSessionListLabel(s);
+                    const meta = buildSessionMeta(s);
+                    return html`
+                      <div
+                        class="session-bar-row selected"
+                        @click=${(e: MouseEvent) => onSelectSession(s.key, e.shiftKey)}
+                        title="${s.key}"
+                      >
+                        <div class="session-bar-label">
+                          <div class="session-bar-title">${displayLabel}</div>
+                          ${meta.length > 0 ? html`<div class="session-bar-meta">${meta.join(" · ")}</div>` : nothing}
+                        </div>
+                  <div class="session-bar-track" style="display: none;"></div>
+                        <div class="session-bar-actions">
+                          <button
+                            class="session-copy-btn"
+                            title="Copy session name"
+                            @click=${(e: MouseEvent) => {
+                              e.stopPropagation();
+                              void copySessionName(s);
+                            }}
+                          >
+                            Copy
+                          </button>
+                          <div class="session-bar-value">${isTokenMode ? formatTokens(value) : formatCost(value)}</div>
+                        </div>
+                      </div>
+                    `;
+                  })}
                 </div>
-              `;
-            })}
-            ${sessions.length > 50 ? html`<div class="muted" style="padding: 8px; text-align: center; font-size: 11px;">+${sessions.length - 50} more</div>` : nothing}
-          </div>
-        `
+              </div>
+            `
+          : nothing
       }
     </div>
   `;
@@ -2903,11 +3981,17 @@ function renderSessionDetailPanel(
   timeSeriesLoading: boolean,
   timeSeriesMode: "cumulative" | "per-turn",
   onTimeSeriesModeChange: (mode: "cumulative" | "per-turn") => void,
+  timeSeriesBreakdownMode: "total" | "by-type",
+  onTimeSeriesBreakdownChange: (mode: "total" | "by-type") => void,
   startDate: string,
   endDate: string,
   selectedDays: string[],
   sessionLogs: SessionLogEntry[] | null,
   sessionLogsLoading: boolean,
+  sessionLogsExpanded: boolean,
+  onToggleSessionLogsExpanded: () => void,
+  contextExpanded: boolean,
+  onToggleContextExpanded: () => void,
   onClose: () => void,
 ) {
   const label = session.label || session.key;
@@ -2917,9 +4001,8 @@ function renderSessionDetailPanel(
   return html`
     <div class="card session-detail-panel">
       <div class="session-detail-header">
-        <div class="session-detail-title">
-          <button class="session-close-btn" @click=${onClose} title="Close session details">×</button>
-          ${displayLabel}
+        <div class="session-detail-header-left">
+          <div class="session-detail-title">${displayLabel}</div>
         </div>
         <div class="session-detail-stats">
           ${
@@ -2931,30 +4014,31 @@ function renderSessionDetailPanel(
               : nothing
           }
         </div>
+        <button class="session-close-btn" @click=${onClose} title="Close session details">×</button>
       </div>
       <div class="session-detail-content">
         ${renderSessionSummary(session)}
         <div class="session-detail-row">
-          ${renderTimeSeriesCompact(timeSeries, timeSeriesLoading, timeSeriesMode, onTimeSeriesModeChange, startDate, endDate, selectedDays)}
-          ${
-            session.contextWeight
-              ? renderContextWeightCompact(session.contextWeight, usage)
-              : html`
-                  <div class="context-weight-compact">
-                    <div class="muted" style="padding: 20px; text-align: center">No context data</div>
-                  </div>
-                `
-          }
+          ${renderTimeSeriesCompact(
+            timeSeries,
+            timeSeriesLoading,
+            timeSeriesMode,
+            onTimeSeriesModeChange,
+            timeSeriesBreakdownMode,
+            onTimeSeriesBreakdownChange,
+            startDate,
+            endDate,
+            selectedDays,
+          )}
         </div>
         <div class="session-detail-bottom">
-          ${renderSessionLogsCompact(sessionLogs, sessionLogsLoading)}
-          ${
-            session.contextWeight
-              ? renderContextDetailsPanel(session.contextWeight)
-              : html`
-                  <div></div>
-                `
-          }
+          ${renderSessionLogsCompact(
+            sessionLogs,
+            sessionLogsLoading,
+            sessionLogsExpanded,
+            onToggleSessionLogsExpanded,
+          )}
+          ${renderContextPanel(session.contextWeight, usage, contextExpanded, onToggleContextExpanded)}
         </div>
       </div>
     </div>
@@ -2966,6 +4050,8 @@ function renderTimeSeriesCompact(
   loading: boolean,
   mode: "cumulative" | "per-turn",
   onModeChange: (mode: "cumulative" | "per-turn") => void,
+  breakdownMode: "total" | "by-type",
+  onBreakdownChange: (mode: "total" | "by-type") => void,
   startDate?: string,
   endDate?: string,
   selectedDays?: string[],
@@ -3011,21 +4097,36 @@ function renderTimeSeriesCompact(
   }
   let cumTokens = 0,
     cumCost = 0;
+  let sumOutput = 0;
+  let sumInput = 0;
+  let sumCacheRead = 0;
+  let sumCacheWrite = 0;
   points = points.map((p) => {
     cumTokens += p.totalTokens;
     cumCost += p.cost;
+    sumOutput += p.output;
+    sumInput += p.input;
+    sumCacheRead += p.cacheRead;
+    sumCacheWrite += p.cacheWrite;
     return { ...p, cumulativeTokens: cumTokens, cumulativeCost: cumCost };
   });
 
   const width = 400,
     height = 80;
-  const padding = { top: 10, right: 10, bottom: 20, left: 40 };
+  const padding = { top: 16, right: 10, bottom: 20, left: 40 };
   const chartWidth = width - padding.left - padding.right;
   const chartHeight = height - padding.top - padding.bottom;
   const isCumulative = mode === "cumulative";
-  const maxValue = isCumulative
-    ? Math.max(...points.map((p) => p.cumulativeTokens), 1)
-    : Math.max(...points.map((p) => p.totalTokens), 1);
+  const breakdownByType = mode === "per-turn" && breakdownMode === "by-type";
+  const totalTypeTokens = sumOutput + sumInput + sumCacheRead + sumCacheWrite;
+  const barTotals = points.map((p) =>
+    isCumulative
+      ? p.cumulativeTokens
+      : breakdownByType
+        ? p.input + p.output + p.cacheRead + p.cacheWrite
+        : p.totalTokens,
+  );
+  const maxValue = Math.max(...barTotals, 1);
   const barWidth = Math.max(2, Math.min(8, (chartWidth / points.length) * 0.7));
   const barGap = Math.max(1, (chartWidth - barWidth * points.length) / (points.length - 1 || 1));
 
@@ -3033,9 +4134,41 @@ function renderTimeSeriesCompact(
     <div class="session-timeseries-compact">
       <div class="timeseries-header-row">
         <div class="card-title" style="font-size: 13px;">Usage Over Time</div>
-        <div class="chart-toggle">
-          <button class="toggle-btn ${isCumulative ? "active" : ""}" @click=${() => onModeChange("cumulative")}>Cumulative</button>
-          <button class="toggle-btn ${!isCumulative ? "active" : ""}" @click=${() => onModeChange("per-turn")}>Per Turn</button>
+        <div class="timeseries-controls">
+          <div class="chart-toggle small">
+            <button
+              class="toggle-btn ${!isCumulative ? "active" : ""}"
+              @click=${() => onModeChange("per-turn")}
+            >
+              Per Turn
+            </button>
+            <button
+              class="toggle-btn ${isCumulative ? "active" : ""}"
+              @click=${() => onModeChange("cumulative")}
+            >
+              Cumulative
+            </button>
+          </div>
+          ${
+            !isCumulative
+              ? html`
+                  <div class="chart-toggle small">
+                    <button
+                      class="toggle-btn ${breakdownMode === "total" ? "active" : ""}"
+                      @click=${() => onBreakdownChange("total")}
+                    >
+                      Total
+                    </button>
+                    <button
+                      class="toggle-btn ${breakdownMode === "by-type" ? "active" : ""}"
+                      @click=${() => onBreakdownChange("by-type")}
+                    >
+                      By Type
+                    </button>
+                  </div>
+                `
+              : nothing
+          }
         </div>
       </div>
       <svg viewBox="0 0 ${width} ${height + 15}" class="timeseries-svg" style="width: 100%; height: auto;">
@@ -3057,26 +4190,91 @@ function renderTimeSeriesCompact(
         }
         <!-- Bars -->
         ${points.map((p, i) => {
-          const val = isCumulative ? p.cumulativeTokens : p.totalTokens;
+          const val = barTotals[i];
           const x = padding.left + i * (barWidth + barGap);
           const barHeight = (val / maxValue) * chartHeight;
           const y = padding.top + chartHeight - barHeight;
           const date = new Date(p.timestamp);
-          const tooltip = `${date.toLocaleDateString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}: ${formatTokens(val)} tokens`;
-          return svg`<rect x="${x}" y="${y}" width="${barWidth}" height="${barHeight}" class="ts-bar" rx="1" style="cursor: pointer;"><title>${tooltip}</title></rect>`;
+          const tooltipLines = [
+            `${date.toLocaleDateString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}`,
+            `${formatTokens(val)} tokens`,
+          ];
+          if (breakdownByType) {
+            tooltipLines.push(`Output ${formatTokens(p.output)}`);
+            tooltipLines.push(`Input ${formatTokens(p.input)}`);
+            tooltipLines.push(`Cache write ${formatTokens(p.cacheWrite)}`);
+            tooltipLines.push(`Cache read ${formatTokens(p.cacheRead)}`);
+          }
+          const tooltip = tooltipLines.join(" · ");
+          if (!breakdownByType) {
+            return svg`<rect x="${x}" y="${y}" width="${barWidth}" height="${barHeight}" class="ts-bar" rx="1" style="cursor: pointer;"><title>${tooltip}</title></rect>`;
+          }
+          const segments = [
+            { value: p.output, class: "output" },
+            { value: p.input, class: "input" },
+            { value: p.cacheWrite, class: "cache-write" },
+            { value: p.cacheRead, class: "cache-read" },
+          ];
+          let yCursor = padding.top + chartHeight;
+          return svg`
+            ${segments.map((seg) => {
+              if (seg.value <= 0 || val <= 0) {
+                return nothing;
+              }
+              const segHeight = barHeight * (seg.value / val);
+              yCursor -= segHeight;
+              return svg`<rect x="${x}" y="${yCursor}" width="${barWidth}" height="${segHeight}" class="ts-bar ${seg.class}" rx="1"><title>${tooltip}</title></rect>`;
+            })}
+          `;
         })}
       </svg>
       <div class="timeseries-summary">${points.length} msgs · ${formatTokens(cumTokens)} · ${formatCost(cumCost)}</div>
+      ${
+        breakdownByType
+          ? html`
+              <div style="margin-top: 8px;">
+                <div class="card-title" style="font-size: 12px; margin-bottom: 6px;">Tokens by Type</div>
+                <div class="cost-breakdown-bar" style="height: 18px;">
+                  <div class="cost-segment output" style="width: ${pct(sumOutput, totalTypeTokens).toFixed(1)}%"></div>
+                  <div class="cost-segment input" style="width: ${pct(sumInput, totalTypeTokens).toFixed(1)}%"></div>
+                  <div class="cost-segment cache-write" style="width: ${pct(sumCacheWrite, totalTypeTokens).toFixed(1)}%"></div>
+                  <div class="cost-segment cache-read" style="width: ${pct(sumCacheRead, totalTypeTokens).toFixed(1)}%"></div>
+                </div>
+                <div class="cost-breakdown-legend">
+                  <div class="legend-item" title="Assistant output tokens">
+                    <span class="legend-dot output"></span>Output ${formatTokens(sumOutput)}
+                  </div>
+                  <div class="legend-item" title="User + tool input tokens">
+                    <span class="legend-dot input"></span>Input ${formatTokens(sumInput)}
+                  </div>
+                  <div class="legend-item" title="Tokens written to cache">
+                    <span class="legend-dot cache-write"></span>Cache Write ${formatTokens(sumCacheWrite)}
+                  </div>
+                  <div class="legend-item" title="Tokens read from cache">
+                    <span class="legend-dot cache-read"></span>Cache Read ${formatTokens(sumCacheRead)}
+                  </div>
+                </div>
+                <div class="cost-breakdown-total">Total: ${formatTokens(totalTypeTokens)}</div>
+              </div>
+            `
+          : nothing
+      }
     </div>
   `;
 }
 
-function renderContextWeightCompact(
+function renderContextPanel(
   contextWeight: UsageSessionEntry["contextWeight"],
   usage: UsageSessionEntry["usage"],
+  expanded: boolean,
+  onToggleExpanded: () => void,
 ) {
   if (!contextWeight) {
-    return nothing;
+    return html`
+      <div class="context-details-panel">
+        <div class="muted" style="padding: 20px; text-align: center">No context data</div>
+      </div>
+    `;
   }
   const systemTokens = charsToTokens(contextWeight.systemPrompt.chars);
   const skillsTokens = charsToTokens(contextWeight.skills.promptChars);
@@ -3096,9 +4294,35 @@ function renderContextWeightCompact(
     }
   }
 
+  const skillsList = contextWeight.skills.entries.toSorted((a, b) => b.blockChars - a.blockChars);
+  const toolsList = contextWeight.tools.entries.toSorted(
+    (a, b) => b.summaryChars + b.schemaChars - (a.summaryChars + a.schemaChars),
+  );
+  const filesList = contextWeight.injectedWorkspaceFiles.toSorted(
+    (a, b) => b.injectedChars - a.injectedChars,
+  );
+  const defaultLimit = 4;
+  const showAll = expanded;
+  const skillsTop = showAll ? skillsList : skillsList.slice(0, defaultLimit);
+  const toolsTop = showAll ? toolsList : toolsList.slice(0, defaultLimit);
+  const filesTop = showAll ? filesList : filesList.slice(0, defaultLimit);
+  const hasMore =
+    skillsList.length > defaultLimit ||
+    toolsList.length > defaultLimit ||
+    filesList.length > defaultLimit;
+
   return html`
-    <div class="context-weight-compact">
-      <div class="card-title" style="font-size: 13px;">Context Weight</div>
+    <div class="context-details-panel">
+      <div class="context-breakdown-header">
+        <div class="card-title" style="font-size: 13px;">System Prompt Breakdown</div>
+        ${
+          hasMore
+            ? html`<button class="context-expand-btn" @click=${onToggleExpanded}>
+                ${showAll ? "Collapse" : "Expand all"}
+              </button>`
+            : nothing
+        }
+      </div>
       <p class="context-weight-desc">${contextPct || "Base context per message"}</p>
       <div class="context-stacked-bar">
         <div class="context-segment system" style="width: ${pct(systemTokens, totalContextTokens).toFixed(1)}%" title="System: ~${formatTokens(systemTokens)}"></div>
@@ -3113,74 +4337,99 @@ function renderContextWeightCompact(
         <span class="legend-item"><span class="legend-dot files"></span>Files ~${formatTokens(filesTokens)}</span>
       </div>
       <div class="context-total">Total: ~${formatTokens(totalContextTokens)}</div>
+      <div class="context-breakdown-grid">
+        ${
+          skillsList.length > 0
+            ? (() => {
+                const more = skillsList.length - skillsTop.length;
+                return html`
+                  <div class="context-breakdown-card">
+                    <div class="context-breakdown-title">Skills (${skillsList.length})</div>
+                    <div class="context-breakdown-list">
+                      ${skillsTop.map(
+                        (s) => html`
+                          <div class="context-breakdown-item">
+                            <span class="mono">${s.name}</span>
+                            <span class="muted">~${formatTokens(charsToTokens(s.blockChars))}</span>
+                          </div>
+                        `,
+                      )}
+                    </div>
+                    ${
+                      more > 0
+                        ? html`<div class="context-breakdown-more">+${more} more</div>`
+                        : nothing
+                    }
+                  </div>
+                `;
+              })()
+            : nothing
+        }
+        ${
+          toolsList.length > 0
+            ? (() => {
+                const more = toolsList.length - toolsTop.length;
+                return html`
+                  <div class="context-breakdown-card">
+                    <div class="context-breakdown-title">Tools (${toolsList.length})</div>
+                    <div class="context-breakdown-list">
+                      ${toolsTop.map(
+                        (t) => html`
+                          <div class="context-breakdown-item">
+                            <span class="mono">${t.name}</span>
+                            <span class="muted">~${formatTokens(charsToTokens(t.summaryChars + t.schemaChars))}</span>
+                          </div>
+                        `,
+                      )}
+                    </div>
+                    ${
+                      more > 0
+                        ? html`<div class="context-breakdown-more">+${more} more</div>`
+                        : nothing
+                    }
+                  </div>
+                `;
+              })()
+            : nothing
+        }
+        ${
+          filesList.length > 0
+            ? (() => {
+                const more = filesList.length - filesTop.length;
+                return html`
+                  <div class="context-breakdown-card">
+                    <div class="context-breakdown-title">Files (${filesList.length})</div>
+                    <div class="context-breakdown-list">
+                      ${filesTop.map(
+                        (f) => html`
+                          <div class="context-breakdown-item">
+                            <span class="mono">${f.name}</span>
+                            <span class="muted">~${formatTokens(charsToTokens(f.injectedChars))}</span>
+                          </div>
+                        `,
+                      )}
+                    </div>
+                    ${
+                      more > 0
+                        ? html`<div class="context-breakdown-more">+${more} more</div>`
+                        : nothing
+                    }
+                  </div>
+                `;
+              })()
+            : nothing
+        }
+      </div>
     </div>
   `;
 }
 
-function renderContextDetailsPanel(contextWeight: NonNullable<UsageSessionEntry["contextWeight"]>) {
-  return html`
-    <div class="context-details-panel">
-      ${
-        contextWeight.skills.entries.length > 0
-          ? html`
-        <details class="context-details" open>
-          <summary>Skills (${contextWeight.skills.entries.length})</summary>
-          <div class="context-list">
-            ${contextWeight.skills.entries
-              .toSorted((a, b) => b.blockChars - a.blockChars)
-              .slice(0, 10)
-              .map(
-                (s) => html`
-              <div class="context-list-item"><span class="mono">${s.name}</span><span class="muted">~${formatTokens(charsToTokens(s.blockChars))} tokens</span></div>
-            `,
-              )}
-          </div>
-        </details>
-      `
-          : nothing
-      }
-      ${
-        contextWeight.tools.entries.length > 0
-          ? html`
-        <details class="context-details">
-          <summary>Tools (${contextWeight.tools.entries.length})</summary>
-          <div class="context-list">
-            ${contextWeight.tools.entries
-              .toSorted((a, b) => b.summaryChars + b.schemaChars - (a.summaryChars + a.schemaChars))
-              .slice(0, 10)
-              .map(
-                (t) => html`
-              <div class="context-list-item"><span class="mono">${t.name}</span><span class="muted">~${formatTokens(charsToTokens(t.summaryChars + t.schemaChars))} tokens</span></div>
-            `,
-              )}
-          </div>
-        </details>
-      `
-          : nothing
-      }
-      ${
-        contextWeight.injectedWorkspaceFiles.length > 0
-          ? html`
-        <details class="context-details">
-          <summary>Files (${contextWeight.injectedWorkspaceFiles.length})</summary>
-          <div class="context-list">
-            ${contextWeight.injectedWorkspaceFiles
-              .toSorted((a, b) => b.injectedChars - a.injectedChars)
-              .map(
-                (f) => html`
-              <div class="context-list-item"><span class="mono">${f.name}</span><span class="muted">~${formatTokens(charsToTokens(f.injectedChars))} tokens</span></div>
-            `,
-              )}
-          </div>
-        </details>
-      `
-          : nothing
-      }
-    </div>
-  `;
-}
-
-function renderSessionLogsCompact(logs: SessionLogEntry[] | null, loading: boolean) {
+function renderSessionLogsCompact(
+  logs: SessionLogEntry[] | null,
+  loading: boolean,
+  expandedAll: boolean,
+  onToggleExpandedAll: () => void,
+) {
   if (loading) {
     return html`
       <div class="session-logs-compact">
@@ -3200,20 +4449,43 @@ function renderSessionLogsCompact(logs: SessionLogEntry[] | null, loading: boole
 
   return html`
     <div class="session-logs-compact">
-      <div class="session-logs-header">Conversation <span style="font-weight: normal; color: var(--text-muted);">(${logs.length} messages)</span></div>
+      <div class="session-logs-header">
+        <span>Conversation <span style="font-weight: normal; color: var(--text-muted);">(${logs.length} messages)</span></span>
+        <button class="btn btn-sm usage-action-btn usage-secondary-btn" @click=${onToggleExpandedAll}>
+          ${expandedAll ? "Collapse All" : "Expand All"}
+        </button>
+      </div>
       <div class="session-logs-list">
-        ${logs.map(
-          (log) => html`
+        ${logs.map((log) => {
+          const toolInfo = parseToolSummary(log.content);
+          const cleanContent = toolInfo.cleanContent || log.content;
+          return html`
           <div class="session-log-entry ${log.role}">
             <div class="session-log-meta">
               <span class="session-log-role">${log.role === "user" ? "You" : "Assistant"}</span>
               <span>${new Date(log.timestamp).toLocaleString()}</span>
               ${log.tokens ? html`<span>${formatTokens(log.tokens)}</span>` : nothing}
             </div>
-            <div class="session-log-content">${log.content}</div>
+            <div class="session-log-content">${cleanContent}</div>
+            ${
+              toolInfo.tools.length > 0
+                ? html`
+                    <details class="session-log-tools" ?open=${expandedAll}>
+                      <summary>${toolInfo.summary}</summary>
+                      <div class="session-log-tools-list">
+                        ${toolInfo.tools.map(
+                          ([name, count]) => html`
+                            <span class="session-log-tools-pill">${name} × ${count}</span>
+                          `,
+                        )}
+                      </div>
+                    </details>
+                  `
+                : nothing
+            }
           </div>
-        `,
-        )}
+        `;
+        })}
       </div>
     </div>
   `;
@@ -3274,6 +4546,8 @@ export function renderUsage(props: UsageProps) {
 
   const isTokenMode = props.chartMode === "tokens";
   const hasQuery = props.query.trim().length > 0;
+  const hasDraftQuery = props.queryDraft.trim().length > 0;
+  // (intentionally no global Clear button in the header; chips + query clear handle this)
 
   // Sort sessions by tokens or cost depending on mode
   const sortedSessions = [...props.sessions].toSorted((a, b) => {
@@ -3298,16 +4572,84 @@ export function renderUsage(props: UsageProps) {
         })
       : sortedSessions;
 
+  const sessionTouchesHours = (session: UsageSessionEntry, hours: number[]): boolean => {
+    if (hours.length === 0) {
+      return true;
+    }
+    const usage = session.usage;
+    const start = usage?.firstActivity ?? session.updatedAt;
+    const end = usage?.lastActivity ?? session.updatedAt;
+    if (!start || !end) {
+      return false;
+    }
+    const startMs = Math.min(start, end);
+    const endMs = Math.max(start, end);
+    let cursor = startMs;
+    while (cursor <= endMs) {
+      const date = new Date(cursor);
+      const hour = getZonedHour(date, props.timeZone);
+      if (hours.includes(hour)) {
+        return true;
+      }
+      const nextHour = setToHourEnd(date, props.timeZone);
+      const nextMs = Math.min(nextHour.getTime(), endMs);
+      cursor = nextMs + 1;
+    }
+    return false;
+  };
+
+  const hourFilteredSessions =
+    props.selectedHours.length > 0
+      ? dayFilteredSessions.filter((s) => sessionTouchesHours(s, props.selectedHours))
+      : dayFilteredSessions;
+
   // Filter sessions by query (client-side)
-  const queryResult = filterSessionsByQuery(dayFilteredSessions, props.query);
+  const queryResult = filterSessionsByQuery(hourFilteredSessions, props.query);
   const filteredSessions = queryResult.sessions;
   const queryWarnings = queryResult.warnings;
-  const querySuggestions = buildQuerySuggestions(props.query, sortedSessions, props.aggregates);
+  const querySuggestions = buildQuerySuggestions(
+    props.queryDraft,
+    sortedSessions,
+    props.aggregates,
+  );
+  const queryTerms = extractQueryTerms(props.query);
+  const selectedValuesFor = (key: string): string[] => {
+    const normalized = normalizeQueryText(key);
+    return queryTerms
+      .filter((term) => normalizeQueryText(term.key ?? "") === normalized)
+      .map((term) => term.value)
+      .filter(Boolean);
+  };
+  const unique = (items: Array<string | undefined>) => {
+    const set = new Set<string>();
+    for (const item of items) {
+      if (item) {
+        set.add(item);
+      }
+    }
+    return Array.from(set);
+  };
+  const agentOptions = unique(sortedSessions.map((s) => s.agentId)).slice(0, 12);
+  const channelOptions = unique(sortedSessions.map((s) => s.channel)).slice(0, 12);
+  const providerOptions = unique([
+    ...sortedSessions.map((s) => s.modelProvider),
+    ...sortedSessions.map((s) => s.providerOverride),
+    ...(props.aggregates?.byProvider.map((entry) => entry.provider) ?? []),
+  ]).slice(0, 12);
+  const modelOptions = unique([
+    ...sortedSessions.map((s) => s.model),
+    ...(props.aggregates?.byModel.map((entry) => entry.model) ?? []),
+  ]).slice(0, 12);
+  const toolOptions = unique(props.aggregates?.tools.tools.map((tool) => tool.name) ?? []).slice(
+    0,
+    12,
+  );
 
   // Get first selected session for detail view (timeseries, logs)
   const primarySelectedEntry =
     props.selectedSessions.length === 1
-      ? filteredSessions.find((s) => s.key === props.selectedSessions[0])
+      ? (props.sessions.find((s) => s.key === props.selectedSessions[0]) ??
+        filteredSessions.find((s) => s.key === props.selectedSessions[0]))
       : null;
 
   // Compute totals from sessions
@@ -3390,9 +4732,12 @@ export function renderUsage(props: UsageProps) {
     );
     displayTotals = computeSessionTotals(selectedSessionEntries);
     displaySessionCount = selectedSessionEntries.length;
-  } else if (props.selectedDays.length > 0) {
+  } else if (props.selectedDays.length > 0 && props.selectedHours.length === 0) {
     // Days selected - use daily aggregates for accurate per-day totals
     displayTotals = computeDailyTotals(props.selectedDays);
+    displaySessionCount = filteredSessions.length;
+  } else if (props.selectedHours.length > 0) {
+    displayTotals = computeSessionTotals(filteredSessions);
     displaySessionCount = filteredSessions.length;
   } else if (hasQuery) {
     displayTotals = computeSessionTotals(filteredSessions);
@@ -3406,23 +4751,12 @@ export function renderUsage(props: UsageProps) {
   const aggregateSessions =
     props.selectedSessions.length > 0
       ? filteredSessions.filter((s) => props.selectedSessions.includes(s.key))
-      : hasQuery
+      : hasQuery || props.selectedHours.length > 0
         ? filteredSessions
         : props.selectedDays.length > 0
           ? dayFilteredSessions
           : sortedSessions;
   const activeAggregates = buildAggregatesFromSessions(aggregateSessions, props.aggregates);
-
-  const columnOptions: Array<{ id: UsageColumnId; label: string }> = [
-    { id: "channel", label: "Channel" },
-    { id: "agent", label: "Agent" },
-    { id: "provider", label: "Provider" },
-    { id: "model", label: "Model" },
-    { id: "messages", label: "Messages" },
-    { id: "tools", label: "Tools" },
-    { id: "errors", label: "Errors" },
-    { id: "duration", label: "Duration" },
-  ];
 
   // Filter daily chart data if sessions are selected
   const filteredDaily =
@@ -3443,121 +4777,380 @@ export function renderUsage(props: UsageProps) {
         })()
       : props.costDaily;
 
-  const insightDays =
-    props.selectedDays.length > 0 ? props.selectedDays : filteredDaily.map((entry) => entry.date);
   const insightStats = buildUsageInsightStats(aggregateSessions, displayTotals, activeAggregates);
+  const isEmpty = !props.loading && !props.totals && props.sessions.length === 0;
+  const hasMissingCost =
+    (displayTotals?.missingCostEntries ?? 0) > 0 ||
+    (displayTotals &&
+      displayTotals.totalTokens > 0 &&
+      displayTotals.totalCost === 0 &&
+      displayTotals.input +
+        displayTotals.output +
+        displayTotals.cacheRead +
+        displayTotals.cacheWrite >
+        0);
+  const datePresets = [
+    { label: "Today", days: 1 },
+    { label: "7d", days: 7 },
+    { label: "30d", days: 30 },
+  ];
+  const applyPreset = (days: number) => {
+    const end = new Date();
+    const start = new Date();
+    start.setDate(start.getDate() - (days - 1));
+    props.onStartDateChange(formatIsoDate(start));
+    props.onEndDateChange(formatIsoDate(end));
+  };
+  const renderFilterSelect = (key: string, label: string, options: string[]) => {
+    if (options.length === 0) {
+      return nothing;
+    }
+    const selected = selectedValuesFor(key);
+    const selectedSet = new Set(selected.map((value) => normalizeQueryText(value)));
+    const allSelected =
+      options.length > 0 && options.every((value) => selectedSet.has(normalizeQueryText(value)));
+    const selectedCount = selected.length;
+    return html`
+      <details
+        class="usage-filter-select"
+        @toggle=${(e: Event) => {
+          const el = e.currentTarget as HTMLDetailsElement;
+          if (!el.open) {
+            return;
+          }
+          const onClick = (ev: MouseEvent) => {
+            const path = ev.composedPath();
+            if (!path.includes(el)) {
+              el.open = false;
+              window.removeEventListener("click", onClick, true);
+            }
+          };
+          window.addEventListener("click", onClick, true);
+        }}
+      >
+        <summary>
+          <span>${label}</span>
+          ${
+            selectedCount > 0
+              ? html`<span class="usage-filter-badge">${selectedCount}</span>`
+              : html`
+                  <span class="usage-filter-badge">All</span>
+                `
+          }
+        </summary>
+        <div class="usage-filter-popover">
+          <div class="usage-filter-actions">
+            <button
+              class="btn btn-sm"
+              @click=${(e: Event) => {
+                e.preventDefault();
+                e.stopPropagation();
+                props.onQueryDraftChange(setQueryTokensForKey(props.queryDraft, key, options));
+              }}
+              ?disabled=${allSelected}
+            >
+              Select All
+            </button>
+            <button
+              class="btn btn-sm"
+              @click=${(e: Event) => {
+                e.preventDefault();
+                e.stopPropagation();
+                props.onQueryDraftChange(setQueryTokensForKey(props.queryDraft, key, []));
+              }}
+              ?disabled=${selectedCount === 0}
+            >
+              Clear
+            </button>
+          </div>
+          <div class="usage-filter-options">
+            ${options.map((value) => {
+              const checked = selectedSet.has(normalizeQueryText(value));
+              return html`
+                <label class="usage-filter-option">
+                  <input
+                    type="checkbox"
+                    .checked=${checked}
+                    @change=${(e: Event) => {
+                      const target = e.target as HTMLInputElement;
+                      const token = `${key}:${value}`;
+                      props.onQueryDraftChange(
+                        target.checked
+                          ? addQueryToken(props.queryDraft, token)
+                          : removeQueryToken(props.queryDraft, token),
+                      );
+                    }}
+                  />
+                  <span>${value}</span>
+                </label>
+              `;
+            })}
+          </div>
+        </div>
+      </details>
+    `;
+  };
+  const exportStamp = formatIsoDate(new Date());
 
   return html`
     <style>${usageStylesString}</style>
 
-    <section class="card">
-      <div class="row" style="justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 12px;">
-        <div style="flex: 1; min-width: 250px;">
-          <div style="display: flex; align-items: center; gap: 10px;">
-            <div class="card-title" style="margin: 0;">Token Usage</div>
-            ${
-              props.loading
-                ? html`
-                    <span class="usage-refresh-indicator">Loading</span>
-                  `
-                : nothing
-            }
-          </div>
+    <section class="usage-page-header">
+      <div class="usage-page-title">Usage</div>
+      <div class="usage-page-subtitle">See where tokens go, when sessions spike, and what drives cost.</div>
+    </section>
+
+    <section class="card usage-header ${props.headerPinned ? "pinned" : ""}">
+      <div class="usage-header-row">
+        <div class="usage-header-title">
+          <div class="card-title" style="margin: 0;">Filters</div>
+          ${
+            props.loading
+              ? html`
+                  <span class="usage-refresh-indicator">Loading</span>
+                `
+              : nothing
+          }
+          ${
+            isEmpty
+              ? html`
+                  <span class="usage-query-hint">Select a date range and click Refresh to load usage.</span>
+                `
+              : nothing
+          }
         </div>
-        <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 8px;">
+        <div class="usage-header-metrics">
           ${
             displayTotals
               ? html`
-            <div style="display: flex; align-items: baseline; gap: 16px; font-size: 14px;">
-              <span><strong style="font-size: 18px;">${formatTokens(displayTotals.totalTokens)}</strong> tokens</span>
-              <span><strong style="font-size: 18px;">${formatCost(displayTotals.totalCost)}</strong> cost</span>
-              <span class="muted">${displaySessionCount} session${displaySessionCount !== 1 ? "s" : ""}</span>
-            </div>
-          `
+                <span class="usage-metric-badge">
+                  <strong>${formatTokens(displayTotals.totalTokens)}</strong> tokens
+                </span>
+                <span class="usage-metric-badge">
+                  <strong>${formatCost(displayTotals.totalCost)}</strong> cost
+                </span>
+                <span class="usage-metric-badge">
+                  <strong>${displaySessionCount}</strong>
+                  session${displaySessionCount !== 1 ? "s" : ""}
+                </span>
+              `
               : nothing
           }
-          <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
-            ${renderFilterChips(
-              props.selectedDays,
-              props.selectedSessions,
-              props.sessions,
-              props.onClearDays,
-              props.onClearSessions,
-              props.onClearFilters,
-            )}
-            <div class="usage-filters-inline">
-              <input
-                type="date"
-                .value=${props.startDate}
-                title="Start Date"
-                @change=${(e: Event) => props.onStartDateChange((e.target as HTMLInputElement).value)}
-              />
-              <span style="color: var(--text-muted);">to</span>
-              <input
-                type="date"
-                .value=${props.endDate}
-                title="End Date"
-                @change=${(e: Event) => props.onEndDateChange((e.target as HTMLInputElement).value)}
-              />
-              <div class="chart-toggle">
+          <button
+            class="usage-pin-btn ${props.headerPinned ? "active" : ""}"
+            title=${props.headerPinned ? "Unpin filters" : "Pin filters"}
+            @click=${props.onToggleHeaderPinned}
+          >
+            ${props.headerPinned ? "Pinned" : "Pin"}
+          </button>
+          <details
+            class="usage-export-menu"
+            @toggle=${(e: Event) => {
+              const el = e.currentTarget as HTMLDetailsElement;
+              if (!el.open) {
+                return;
+              }
+              const onClick = (ev: MouseEvent) => {
+                const path = ev.composedPath();
+                if (!path.includes(el)) {
+                  el.open = false;
+                  window.removeEventListener("click", onClick, true);
+                }
+              };
+              window.addEventListener("click", onClick, true);
+            }}
+          >
+            <summary class="usage-export-button">Export ▾</summary>
+            <div class="usage-export-popover">
+              <div class="usage-export-list">
                 <button
-                  class="toggle-btn ${isTokenMode ? "active" : ""}"
-                  @click=${() => props.onChartModeChange("tokens")}
+                  class="usage-export-item"
+                  @click=${() =>
+                    downloadTextFile(
+                      `openclaw-usage-sessions-${exportStamp}.csv`,
+                      buildSessionsCsv(filteredSessions),
+                      "text/csv",
+                    )}
+                  ?disabled=${filteredSessions.length === 0}
                 >
-                  Tokens
+                  Sessions CSV
                 </button>
                 <button
-                  class="toggle-btn ${!isTokenMode ? "active" : ""}"
-                  @click=${() => props.onChartModeChange("cost")}
+                  class="usage-export-item"
+                  @click=${() =>
+                    downloadTextFile(
+                      `openclaw-usage-daily-${exportStamp}.csv`,
+                      buildDailyCsv(filteredDaily),
+                      "text/csv",
+                    )}
+                  ?disabled=${filteredDaily.length === 0}
                 >
-                  Cost
+                  Daily CSV
+                </button>
+                <button
+                  class="usage-export-item"
+                  @click=${() =>
+                    downloadTextFile(
+                      `openclaw-usage-${exportStamp}.json`,
+                      JSON.stringify(
+                        {
+                          totals: displayTotals,
+                          sessions: filteredSessions,
+                          daily: filteredDaily,
+                          aggregates: activeAggregates,
+                        },
+                        null,
+                        2,
+                      ),
+                      "application/json",
+                    )}
+                  ?disabled=${filteredSessions.length === 0 && filteredDaily.length === 0}
+                >
+                  JSON
                 </button>
               </div>
-              <button class="btn btn-sm" @click=${props.onRefresh} ?disabled=${props.loading}>↻</button>
             </div>
-          </div>
+          </details>
         </div>
+      </div>
+      <div class="usage-header-row">
+        <div class="usage-controls">
+          ${renderFilterChips(
+            props.selectedDays,
+            props.selectedHours,
+            props.selectedSessions,
+            props.sessions,
+            props.onClearDays,
+            props.onClearHours,
+            props.onClearSessions,
+            props.onClearFilters,
+          )}
+          <div class="usage-presets">
+            ${datePresets.map(
+              (preset) => html`
+                <button class="btn btn-sm" @click=${() => applyPreset(preset.days)}>
+                  ${preset.label}
+                </button>
+              `,
+            )}
+          </div>
+          <input
+            type="date"
+            .value=${props.startDate}
+            title="Start Date"
+            @change=${(e: Event) => props.onStartDateChange((e.target as HTMLInputElement).value)}
+          />
+          <span style="color: var(--text-muted);">to</span>
+          <input
+            type="date"
+            .value=${props.endDate}
+            title="End Date"
+            @change=${(e: Event) => props.onEndDateChange((e.target as HTMLInputElement).value)}
+          />
+          <select
+            title="Time zone"
+            .value=${props.timeZone}
+            @change=${(e: Event) =>
+              props.onTimeZoneChange((e.target as HTMLSelectElement).value as "local" | "utc")}
+          >
+            <option value="local">Local</option>
+            <option value="utc">UTC</option>
+          </select>
+          <div class="chart-toggle">
+            <button
+              class="toggle-btn ${isTokenMode ? "active" : ""}"
+              @click=${() => props.onChartModeChange("tokens")}
+            >
+              Tokens
+            </button>
+            <button
+              class="toggle-btn ${!isTokenMode ? "active" : ""}"
+              @click=${() => props.onChartModeChange("cost")}
+            >
+              Cost
+            </button>
+          </div>
+          <button
+            class="btn btn-sm usage-action-btn usage-primary-btn"
+            @click=${props.onRefresh}
+            ?disabled=${props.loading}
+          >
+            Refresh
+          </button>
+        </div>
+        
       </div>
 
       <div style="margin-top: 12px;">
-        <div class="usage-query-bar">
+          <div class="usage-query-bar">
           <input
             class="usage-query-input"
             type="text"
-            .value=${props.query}
-            placeholder="Filter sessions (e.g. agent:main model:gpt-4o has:errors minTokens:2000)"
-            @input=${(e: Event) => props.onQueryChange((e.target as HTMLInputElement).value)}
+            .value=${props.queryDraft}
+            placeholder="Filter sessions (e.g. key:agent:main:cron* model:gpt-4o has:errors minTokens:2000)"
+            @input=${(e: Event) => props.onQueryDraftChange((e.target as HTMLInputElement).value)}
+            @keydown=${(e: KeyboardEvent) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                props.onApplyQuery();
+              }
+            }}
           />
-          ${
-            props.query.trim()
-              ? html`<button class="btn btn-sm" @click=${props.onClearQuery}>Clear</button>`
-              : nothing
-          }
-          <details class="usage-columns-panel">
-            <summary>View</summary>
-            <div class="usage-columns-list">
-              ${columnOptions.map(
-                (opt) => html`
-                  <label class="usage-columns-item">
-                    <input
-                      type="checkbox"
-                      .checked=${props.visibleColumns.includes(opt.id)}
-                      @change=${() => props.onToggleColumn(opt.id)}
-                    />
-                    <span>${opt.label}</span>
-                  </label>
-                `,
-              )}
-            </div>
-          </details>
-          <span class="usage-query-hint">
+          <div class="usage-query-actions">
+            <button
+              class="btn btn-sm usage-action-btn usage-secondary-btn"
+              @click=${props.onApplyQuery}
+              ?disabled=${props.loading || (!hasDraftQuery && !hasQuery)}
+            >
+              Filter (client-side)
+            </button>
             ${
-              hasQuery
-                ? `${filteredSessions.length} of ${totalSessions} sessions match`
-                : `${totalSessions} sessions in range`
+              hasDraftQuery || hasQuery
+                ? html`<button class="btn btn-sm usage-action-btn usage-secondary-btn" @click=${props.onClearQuery}>Clear</button>`
+                : nothing
             }
+            <span class="usage-query-hint">
+              ${
+                hasQuery
+                  ? `${filteredSessions.length} of ${totalSessions} sessions match`
+                  : `${totalSessions} sessions in range`
+              }
+            </span>
+          </div>
+        </div>
+        <div class="usage-filter-row">
+          ${renderFilterSelect("agent", "Agent", agentOptions)}
+          ${renderFilterSelect("channel", "Channel", channelOptions)}
+          ${renderFilterSelect("provider", "Provider", providerOptions)}
+          ${renderFilterSelect("model", "Model", modelOptions)}
+          ${renderFilterSelect("tool", "Tool", toolOptions)}
+          <span class="usage-query-hint">
+            Tip: use filters or click bars to filter days.
           </span>
         </div>
+        ${
+          queryTerms.length > 0
+            ? html`
+                <div class="usage-query-chips">
+                  ${queryTerms.map((term) => {
+                    const label = term.raw;
+                    return html`
+                      <span class="usage-query-chip">
+                        ${label}
+                        <button
+                          title="Remove filter"
+                          @click=${() =>
+                            props.onQueryDraftChange(removeQueryToken(props.queryDraft, label))}
+                        >
+                          ×
+                        </button>
+                      </span>
+                    `;
+                  })}
+                </div>
+              `
+            : nothing
+        }
         ${
           querySuggestions.length > 0
             ? html`
@@ -3567,8 +5160,8 @@ export function renderUsage(props: UsageProps) {
                       <button
                         class="usage-query-suggestion"
                         @click=${() =>
-                          props.onQueryChange(
-                            applySuggestionToQuery(props.query, suggestion.value),
+                          props.onQueryDraftChange(
+                            applySuggestionToQuery(props.queryDraft, suggestion.value),
                           )}
                       >
                         ${suggestion.label}
@@ -3611,10 +5204,13 @@ export function renderUsage(props: UsageProps) {
       displayTotals,
       activeAggregates,
       insightStats,
-      insightDays,
+      hasMissingCost,
+      buildPeakErrorHours(aggregateSessions, props.timeZone),
       displaySessionCount,
       totalSessions,
     )}
+
+    ${renderUsageMosaic(aggregateSessions, props.timeZone, props.selectedHours, props.onSelectHour)}
 
     <!-- Two-column layout: Daily+Breakdown on left, Sessions on right -->
     <div class="usage-grid">
@@ -3637,9 +5233,17 @@ export function renderUsage(props: UsageProps) {
           props.selectedSessions,
           props.selectedDays,
           isTokenMode,
+          props.sessionSort,
+          props.sessionSortDir,
+          props.recentSessions,
+          props.sessionsTab,
           props.onSelectSession,
+          props.onSessionSortChange,
+          props.onSessionSortDirChange,
+          props.onSessionsTabChange,
           props.visibleColumns,
           totalSessions,
+          props.onClearSessions,
         )}
       </div>
     </div>
@@ -3653,14 +5257,22 @@ export function renderUsage(props: UsageProps) {
             props.timeSeriesLoading,
             props.timeSeriesMode,
             props.onTimeSeriesModeChange,
+            props.timeSeriesBreakdownMode,
+            props.onTimeSeriesBreakdownChange,
             props.startDate,
             props.endDate,
             props.selectedDays,
             props.sessionLogs,
             props.sessionLogsLoading,
+            props.sessionLogsExpanded,
+            props.onToggleSessionLogsExpanded,
+            props.contextExpanded,
+            props.onToggleContextExpanded,
             props.onClearSessions,
           )
         : renderEmptyDetailState()
     }
   `;
 }
+
+// Exposed for Playwright/Vitest browser unit tests.

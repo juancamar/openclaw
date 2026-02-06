@@ -168,7 +168,7 @@ export function titleForTab(tab: Tab) {
     case "sessions":
       return "Sessions";
     case "usage":
-      return "Token Usage";
+      return "Usage";
     case "cron":
       return "Cron Jobs";
     case "skills":
@@ -201,7 +201,7 @@ export function subtitleForTab(tab: Tab) {
     case "sessions":
       return "Inspect active sessions and adjust per-session defaults.";
     case "usage":
-      return "Track token usage, costs, and explore session conversations.";
+      return "";
     case "cron":
       return "Schedule wakeups and recurring agent runs.";
     case "skills":

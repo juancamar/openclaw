@@ -232,21 +232,32 @@ export class OpenClawApp extends LitElement {
   @state() usageCostSummary: import("./types.js").CostUsageSummary | null = null;
   @state() usageError: string | null = null;
   @state() usageStartDate = (() => {
-    const d = new Date();
-    d.setDate(d.getDate() - 20); // 21 days default
-    return d.toISOString().slice(0, 10);
+    return new Date().toISOString().slice(0, 10);
   })();
   @state() usageEndDate = new Date().toISOString().slice(0, 10);
   @state() usageSelectedSessions: string[] = [];
   @state() usageSelectedDays: string[] = [];
-  @state() usageChartMode: "tokens" | "cost" = "cost";
-  @state() usageDailyChartMode: "total" | "by-type" = "total";
+  @state() usageSelectedHours: number[] = [];
+  @state() usageChartMode: "tokens" | "cost" = "tokens";
+  @state() usageDailyChartMode: "total" | "by-type" = "by-type";
   @state() usageTimeSeriesMode: "cumulative" | "per-turn" = "per-turn";
+  @state() usageTimeSeriesBreakdownMode: "total" | "by-type" = "by-type";
   @state() usageTimeSeries: import("./types.js").SessionUsageTimeSeries | null = null;
   @state() usageTimeSeriesLoading = false;
   @state() usageSessionLogs: import("./views/usage.js").SessionLogEntry[] | null = null;
   @state() usageSessionLogsLoading = false;
+  @state() usageSessionLogsExpanded = false;
+  // Applied query (used to filter the already-loaded sessions list client-side).
   @state() usageQuery = "";
+  // Draft query text (updates immediately as the user types; applied via debounce or "Search").
+  @state() usageQueryDraft = "";
+  @state() usageSessionSort: "tokens" | "cost" | "recent" | "messages" | "errors" = "recent";
+  @state() usageSessionSortDir: "desc" | "asc" = "desc";
+  @state() usageRecentSessions: string[] = [];
+  @state() usageTimeZone: "local" | "utc" = "local";
+  @state() usageContextExpanded = false;
+  @state() usageHeaderPinned = false;
+  @state() usageSessionsTab: "all" | "recent" = "all";
   @state() usageVisibleColumns: string[] = [
     "channel",
     "agent",
@@ -257,6 +268,9 @@ export class OpenClawApp extends LitElement {
     "errors",
     "duration",
   ];
+
+  // Non-reactive (don’t trigger renders just for timer bookkeeping).
+  usageQueryDebounceTimer: number | null = null;
 
   @state() cronLoading = false;
   @state() cronJobs: CronJob[] = [];

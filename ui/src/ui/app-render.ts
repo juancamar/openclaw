@@ -198,8 +198,8 @@ export function renderApp(state: AppViewState) {
       <main class="content ${isChat ? "content--chat" : ""}">
         <section class="content-header">
           <div>
-            <div class="page-title">${titleForTab(state.tab)}</div>
-            <div class="page-sub">${subtitleForTab(state.tab)}</div>
+            ${state.tab === "usage" ? nothing : html`<div class="page-title">${titleForTab(state.tab)}</div>`}
+            ${state.tab === "usage" ? nothing : html`<div class="page-sub">${subtitleForTab(state.tab)}</div>`}
           </div>
           <div class="page-meta">
             ${state.lastError ? html`<div class="pill danger">${state.lastError}</div>` : nothing}
@@ -328,34 +328,108 @@ export function renderApp(state: AppViewState) {
                 costDaily: state.usageCostSummary?.daily ?? [],
                 selectedSessions: state.usageSelectedSessions,
                 selectedDays: state.usageSelectedDays,
+                selectedHours: state.usageSelectedHours,
                 chartMode: state.usageChartMode,
                 dailyChartMode: state.usageDailyChartMode,
                 timeSeriesMode: state.usageTimeSeriesMode,
+                timeSeriesBreakdownMode: state.usageTimeSeriesBreakdownMode,
                 timeSeries: state.usageTimeSeries,
                 timeSeriesLoading: state.usageTimeSeriesLoading,
                 sessionLogs: state.usageSessionLogs,
                 sessionLogsLoading: state.usageSessionLogsLoading,
+                sessionLogsExpanded: state.usageSessionLogsExpanded,
                 query: state.usageQuery,
+                queryDraft: state.usageQueryDraft,
+                sessionSort: state.usageSessionSort,
+                sessionSortDir: state.usageSessionSortDir,
+                recentSessions: state.usageRecentSessions,
+                sessionsTab: state.usageSessionsTab,
                 visibleColumns:
                   state.usageVisibleColumns as import("./views/usage.ts").UsageColumnId[],
+                timeZone: state.usageTimeZone,
+                contextExpanded: state.usageContextExpanded,
+                headerPinned: state.usageHeaderPinned,
                 onStartDateChange: (date) => {
                   state.usageStartDate = date;
                   state.usageSelectedDays = [];
+                  state.usageSelectedHours = [];
                   state.usageSelectedSessions = [];
-                  debouncedLoadUsage(state);
                 },
                 onEndDateChange: (date) => {
                   state.usageEndDate = date;
                   state.usageSelectedDays = [];
+                  state.usageSelectedHours = [];
                   state.usageSelectedSessions = [];
-                  debouncedLoadUsage(state);
                 },
                 onRefresh: () => loadUsage(state),
-                onQueryChange: (query) => {
-                  state.usageQuery = query;
+                onTimeZoneChange: (zone) => {
+                  state.usageTimeZone = zone;
+                },
+                onToggleContextExpanded: () => {
+                  state.usageContextExpanded = !state.usageContextExpanded;
+                },
+                onToggleSessionLogsExpanded: () => {
+                  state.usageSessionLogsExpanded = !state.usageSessionLogsExpanded;
+                },
+                onToggleHeaderPinned: () => {
+                  state.usageHeaderPinned = !state.usageHeaderPinned;
+                },
+                onSelectHour: (hour, shiftKey) => {
+                  if (shiftKey && state.usageSelectedHours.length > 0) {
+                    const allHours = Array.from({ length: 24 }, (_, i) => i);
+                    const lastSelected =
+                      state.usageSelectedHours[state.usageSelectedHours.length - 1];
+                    const lastIdx = allHours.indexOf(lastSelected);
+                    const thisIdx = allHours.indexOf(hour);
+                    if (lastIdx !== -1 && thisIdx !== -1) {
+                      const [start, end] =
+                        lastIdx < thisIdx ? [lastIdx, thisIdx] : [thisIdx, lastIdx];
+                      const range = allHours.slice(start, end + 1);
+                      state.usageSelectedHours = [
+                        ...new Set([...state.usageSelectedHours, ...range]),
+                      ];
+                    }
+                  } else {
+                    if (state.usageSelectedHours.includes(hour)) {
+                      state.usageSelectedHours = state.usageSelectedHours.filter((h) => h !== hour);
+                    } else {
+                      state.usageSelectedHours = [...state.usageSelectedHours, hour];
+                    }
+                  }
+                },
+                onQueryDraftChange: (query) => {
+                  state.usageQueryDraft = query;
+                  if (state.usageQueryDebounceTimer) {
+                    window.clearTimeout(state.usageQueryDebounceTimer);
+                  }
+                  state.usageQueryDebounceTimer = window.setTimeout(() => {
+                    state.usageQuery = state.usageQueryDraft;
+                    state.usageQueryDebounceTimer = null;
+                  }, 250);
+                },
+                onApplyQuery: () => {
+                  if (state.usageQueryDebounceTimer) {
+                    window.clearTimeout(state.usageQueryDebounceTimer);
+                    state.usageQueryDebounceTimer = null;
+                  }
+                  state.usageQuery = state.usageQueryDraft;
                 },
                 onClearQuery: () => {
+                  if (state.usageQueryDebounceTimer) {
+                    window.clearTimeout(state.usageQueryDebounceTimer);
+                    state.usageQueryDebounceTimer = null;
+                  }
+                  state.usageQueryDraft = "";
                   state.usageQuery = "";
+                },
+                onSessionSortChange: (sort) => {
+                  state.usageSessionSort = sort;
+                },
+                onSessionSortDirChange: (dir) => {
+                  state.usageSessionSortDir = dir;
+                },
+                onSessionsTabChange: (tab) => {
+                  state.usageSessionsTab = tab;
                 },
                 onToggleColumn: (column) => {
                   if (state.usageVisibleColumns.includes(column)) {
@@ -369,6 +443,10 @@ export function renderApp(state: AppViewState) {
                 onSelectSession: (key, shiftKey) => {
                   state.usageTimeSeries = null;
                   state.usageSessionLogs = null;
+                  state.usageRecentSessions = [
+                    key,
+                    ...state.usageRecentSessions.filter((entry) => entry !== key),
+                  ].slice(0, 8);
 
                   if (shiftKey && state.usageSelectedSessions.length > 0) {
                     // Shift-click: select range from last selected to this session
@@ -398,11 +476,13 @@ export function renderApp(state: AppViewState) {
                       state.usageSelectedSessions = newSelection;
                     }
                   } else {
-                    // Regular click: toggle single session
-                    if (state.usageSelectedSessions.includes(key)) {
-                      state.usageSelectedSessions = state.usageSelectedSessions.filter(
-                        (k) => k !== key,
-                      );
+                    // Regular click: focus a single session (so details always open).
+                    // Click the focused session again to clear selection.
+                    if (
+                      state.usageSelectedSessions.length === 1 &&
+                      state.usageSelectedSessions[0] === key
+                    ) {
+                      state.usageSelectedSessions = [];
                     } else {
                       state.usageSelectedSessions = [key];
                     }
@@ -448,8 +528,14 @@ export function renderApp(state: AppViewState) {
                 onTimeSeriesModeChange: (mode) => {
                   state.usageTimeSeriesMode = mode;
                 },
+                onTimeSeriesBreakdownChange: (mode) => {
+                  state.usageTimeSeriesBreakdownMode = mode;
+                },
                 onClearDays: () => {
                   state.usageSelectedDays = [];
+                },
+                onClearHours: () => {
+                  state.usageSelectedHours = [];
                 },
                 onClearSessions: () => {
                   state.usageSelectedSessions = [];
@@ -458,6 +544,7 @@ export function renderApp(state: AppViewState) {
                 },
                 onClearFilters: () => {
                   state.usageSelectedDays = [];
+                  state.usageSelectedHours = [];
                   state.usageSelectedSessions = [];
                   state.usageTimeSeries = null;
                   state.usageSessionLogs = null;
